@@ -27,6 +27,7 @@ public:
     static PolyhedronShape makeBox(const Vector3& halfExtents);
 
     const HalfEdgeStructure& getTopology() const { return topology_; }
+    const HalfEdgeStructure* getHalfEdgeStructure() const override { return &topology_; }
 
     ShapeType getType() const override { return ShapeType::Polyhedron; }
     Vector3 getSupport(const Vector3& direction) const override;
@@ -38,6 +39,10 @@ public:
     FeatureId getSupportFeature(const Vector3& direction) const override {
         return static_cast<FeatureId>(getSupportVertexIndex(direction));
     }
+
+    /// A face cuja normal é a mais alinhada com `direction`. Retorna 0 se a
+    /// face tiver mais de `maxVertices` vértices.
+    int getSupportFace(const Vector3& direction, Vector3* outVertices, int maxVertices) const override;
 
     Real getVolume() const override { return volume_; }
     Vector3 getCentroid() const override { return centroid_; }

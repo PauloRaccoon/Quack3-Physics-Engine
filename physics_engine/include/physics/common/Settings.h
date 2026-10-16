@@ -71,4 +71,26 @@ constexpr Real kGravity         = Real(9.81);         ///< Aceleração da gravi
 constexpr Real kMaxLinearSpeed  = Real(200);          ///< Limite de velocidade linear [m/s]
 constexpr Real kMaxAngularSpeed = Real(100);          ///< Limite de velocidade angular [rad/s]
 
+// -----------------------------------------------------------------------------
+// Narrowphase (GJK / EPA / contatos)
+// -----------------------------------------------------------------------------
+constexpr int  kGJKMaxIterations = 64;
+/// Critério de convergência do GJK (relativo): |v|² - v·w <= tol * escala.
+constexpr Real kGJKTolerance = detail::kIsSinglePrecision ? Real(1e-6) : Real(1e-12);
+/// |v|² abaixo disto => a origem está sobre o simplex (formas se tocam/interpenetram).
+constexpr Real kGJKOriginEpsilonSq = detail::kIsSinglePrecision ? Real(1e-10) : Real(1e-20);
+
+constexpr int  kEPAMaxIterations = 48;
+/// EPA termina quando o suporte avança menos que isto além da face mais próxima [m].
+constexpr Real kEPATolerance = detail::kIsSinglePrecision ? Real(1e-4) : Real(1e-8);
+/// Uma face é "visível" do novo ponto se este estiver à frente do plano por mais que isto.
+constexpr Real kEPAVisibleEpsilon = detail::kIsSinglePrecision ? Real(1e-5) : Real(1e-10);
+
+/// Raio [m] usado para (a) casar novos contatos com contatos persistidos e
+/// (b) descartar contatos persistidos que se afastaram ou deslizaram.
+constexpr Real kContactBreakingThreshold = Real(0.02);
+
+constexpr Real kContactMargin   = kLinearSlop;        ///< Contatos "especulativos": separação ≤ margem ainda gera contato
+constexpr Real kPersistentContactThreshold = Real(0.05); ///< Deriva máx. [m] para reaproveitar impulsos (warm start)
+
 } // namespace physics

@@ -114,6 +114,16 @@ int PolyhedronShape::getSupportVertexIndex(const Vector3& direction, int hint) c
     return topology_.findSupportVertex(direction, hint);
 }
 
+int PolyhedronShape::getSupportFace(const Vector3& direction, Vector3* out, int maxVertices) const {
+    const int face = topology_.findBestFace(direction);
+    int n = 0;
+    topology_.forEachFaceVertex(face, [&](int v) {
+        if (n < maxVertices) out[n] = topology_.getVertex(v).position;
+        ++n;
+    });
+    return n <= maxVertices ? n : 0;   // face grande demais: sem polígono
+}
+
 Vector3 PolyhedronShape::getSupport(const Vector3& direction) const {
     return topology_.getVertex(getSupportVertexIndex(direction)).position;
 }
