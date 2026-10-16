@@ -112,7 +112,10 @@ private:
 // =============================================================================
 struct ContactGeneratorSettings {
     /// Formas separadas por até esta distância ainda geram contato (folga/"speculative").
-    Real contactMargin = Real(0);
+    /// Padrão = kContactMargin: o solver usa o vão como contato especulativo
+    /// (permite aproximar no máximo vão/Δt), o que evita que dois corpos que se
+    /// tocam "exatamente" no limite dependam do arredondamento para gerar contato.
+    Real contactMargin = kContactMargin;
     /// No clipping, mantém pontos com separação até este valor (evita perder
     /// pontos de uma face apoiada com leve inclinação).
     Real clipMargin = kLinearSlop;
