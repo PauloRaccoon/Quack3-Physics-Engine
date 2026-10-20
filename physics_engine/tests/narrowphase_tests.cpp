@@ -597,6 +597,75 @@ static void testCollideWarmStart() {
     CHECK(m.count == 0);
 }
 
+// =============================================================================
+// Formas GRANDES com micro-penetração (regressão).
+//
+// O GJK em ponto flutuante perde precisão quando uma das formas é enorme: um chão de ±100 m dá
+// diferença de Minkowski com coordenadas de dezenas de metros, e 1 ulp (~1e-5 m em float) já não
+// separa uma folga de décimos de milímetro de uma penetração. Medido no motor da Fase 8 (float):
+// 0,17 % das caixas sobre um chão de ±100 m e 0,7 % sobre um de ±500 m saíam com normal arbitrária
+// e profundidade de 160 a 875 m — um contato assim derruba uma pilha inteira num único passo.
+// Duas defesas: GJK::kGJKNoiseFactor (ruído relativo) e refineContactAxis (valida o eixo).
+//
+// Este teste também protege contra a falha INVERSA, que apareceu na primeira versão do refino:
+// ele "consertava" contatos corretos (a inclinação de ~1e-5 rad da normal, vezes 50 m de extensão,
+// passava da tolerância) e trocava o ponto de contato por um canto do chão — 27 % dos contatos
+// esfera × chão em float, 84 % com chão de ±500 m. Por isso os pontos também são verificados.
+// =============================================================================
+static void testLargeGroundRobustness() {
+    struct Cfg { Real half, penMax, tiltMax; };
+    const Cfg cfgs[] = {{Real(50), Real(0.02), Real(0.01)},
+                        {Real(50), Real(0.0005), Real(0.0002)},
+                        {Real(100), Real(0.002), Real(0.0005)},
+                        {Real(500), Real(0.002), Real(0.0005)}};
+    int badBox = 0, badSphere = 0, noContact = 0, total = 0;
+    Real worstDepth = 0;
+    for (const Cfg& c : cfgs) {
+        BoxShape ground(Vector3(c.half, 1, c.half));
+        BoxShape box(Vector3(0.5f, 0.5f, 0.5f));
+        SphereShape sphere(Real(0.5));
+        const Transform xfG(Vector3(0, -1, 0));   // face superior em y = 0
+        Rng rng(777);
+        for (int i = 0; i < 4000; ++i, ++total) {
+            const Real cx = rng.range(-c.half * Real(0.8), c.half * Real(0.8));
+            const Real cz = rng.range(-c.half * Real(0.8), c.half * Real(0.8));
+            const Real pen = rng.range(Real(1e-5), c.penMax);
+
+            // Caixa girada em torno de Y e levemente inclinada.
+            Quaternion q = Quaternion::fromAxisAngle(Vector3::unitY(), rng.range(0, Real(6.28)));
+            q = q * Quaternion::fromAxisAngle(Vector3::unitX(), rng.range(0, c.tiltMax));
+            ContactPatch p;
+            if (!ContactGenerator::generate(ground, xfG, box, Transform(Vector3(cx, Real(0.5) - pen, cz), q), p)) {
+                ++noContact;
+            } else {
+                bool ok = p.normal.y > Real(0.99);
+                for (int k = 0; k < p.count; ++k) {
+                    ok = ok && p.points[k].depth > Real(-0.01) && p.points[k].depth < Real(0.05);
+                    // O ponto tem que estar sob a caixa, não num canto do chão.
+                    ok = ok && std::abs(p.points[k].pointB.x - cx) < Real(1) && std::abs(p.points[k].pointB.z - cz) < Real(1);
+                    worstDepth = std::max(worstDepth, p.points[k].depth);
+                }
+                badBox += ok ? 0 : 1;
+            }
+
+            const Real sp = rng.range(Real(1e-5), Real(0.05));
+            if (!ContactGenerator::generate(ground, xfG, sphere, Transform(Vector3(cx, Real(0.5) - sp, cz)), p)) {
+                ++noContact;
+            } else {
+                const bool ok = p.normal.y > Real(0.99) && p.count >= 1 && std::abs(p.points[0].depth - sp) < Real(0.002) &&
+                                std::abs(p.points[0].pointB.x - cx) < Real(0.6) && std::abs(p.points[0].pointB.z - cz) < Real(0.6);
+                badSphere += ok ? 0 : 1;
+            }
+        }
+    }
+    std::printf("  [info] formas grandes: %d pares x2, caixas ruins=%d, esferas ruins=%d, sem contato=%d, pior profundidade=%.3f m\n",
+                total, badBox, badSphere, noContact, double(worstDepth));
+    CHECK(badBox == 0);
+    CHECK(badSphere == 0);
+    CHECK(noContact == 0);
+    CHECK(worstDepth < Real(0.05));
+}
+
 static void testPerformanceInfo() {
     BoxShape a(Vector3(0.5f, 0.5f, 0.5f)), b(Vector3(0.5f, 0.5f, 0.5f));
     Rng rng(5);
@@ -622,6 +691,7 @@ int main() {
     testDegenerateCases();
     testManifold();
     testCollideWarmStart();
+    testLargeGroundRobustness();
     testPerformanceInfo();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -406,42 +406,76 @@ static void testFreeFall() {
     CHECK(std::abs(moon.getBody(m).getLinearVelocity().y + Real(1.62)) < Real(0.01));
 }
 
-static void testStacking() {
-    PhysicsWorld w;
+/// Torre de 10 caixas perfeitamente alinhada (o caso mais difícil para um solver iterativo): roda
+/// `seconds` s e devolve o pico de deriva do topo, a deriva no fim, o erro de altura e a
+/// velocidade máxima na última janela de 5 s.
+struct TowerResult { Real peakDrift, finalDrift, heightError, lateSpeed; bool sleeping; int touching; Real window[6]; };
+
+static TowerResult runTower(int velocityIterations, int positionIterations, int seconds) {
+    PhysicsWorldSettings st;
+    st.solver.velocityIterations = velocityIterations;
+    st.solver.positionIterations = positionIterations;
+    PhysicsWorld w(st);
     w.createBody(groundDesc());
     const int N = 10;
     std::vector<BodyId> ids;
     for (int i = 0; i < N; ++i) ids.push_back(w.createBody(boxDesc(Vector3(0, Real(0.5) + Real(i), 0))));
 
-    for (int i = 0; i < 600; ++i) w.step();   // 10 s
-
+    TowerResult r{0, 0, 0, 0, false, 0, {0, 0, 0, 0, 0, 0}};
+    const int steps = seconds * 60;
+    for (int i = 0; i < steps; ++i) {
+        w.step();
+        const Vector3 top = w.getBody(ids.back()).getWorldCenterOfMass();
+        r.peakDrift = std::max(r.peakDrift, std::max(std::abs(top.x), std::abs(top.z)));
+        for (BodyId id : ids) {   // pico de velocidade por janela de 10 s (tendência: decai, estável ou cresce?)
+            const int wdw = std::min(5, i / 600);
+            r.window[wdw] = std::max(r.window[wdw], w.getBody(id).getLinearVelocity().length());
+        }
+        if (i >= steps - 300) {
+            for (BodyId id : ids) r.lateSpeed = std::max(r.lateSpeed, w.getBody(id).getLinearVelocity().length());
+        }
+    }
     const Vector3 top = w.getBody(ids.back()).getWorldCenterOfMass();
-    Real maxSpeed = 0;
-    for (BodyId id : ids) maxSpeed = std::max(maxSpeed, w.getBody(id).getLinearVelocity().length());
-    std::printf("  [info] pilha de %d caixas apos 10 s: topo y=%.4f (ideal %.1f), deriva xz=%.4f, vel max=%.5f, contatos=%d\n",
-                N, double(top.y), double(N) - 0.5, double(std::max(std::abs(top.x), std::abs(top.z))),
-                double(maxSpeed), w.getStats().contactPoints);
-    CHECK(std::abs(top.y - (Real(N) - Real(0.5))) < Real(0.05));
-    // Torre de 10 caixas perfeitamente alinhada com 10 iterações: balança devagar e amortece
-    // (limite do solver iterativo, não instabilidade) -> critérios de "continua em pé e calma".
-    CHECK(std::abs(top.x) < Real(0.06) && std::abs(top.z) < Real(0.06));
-    CHECK(maxSpeed < Real(0.25));
-    CHECK(w.getStats().touchingPairs == N);      // cada caixa toca a de baixo (ou o chão)
+    r.finalDrift = std::max(std::abs(top.x), std::abs(top.z));
+    r.heightError = std::abs(top.y - (Real(N) - Real(0.5)));
+    r.sleeping = !w.getBody(ids.back()).isAwake();
+    r.touching = w.getStats().touchingPairs;
+    return r;
+}
 
-    // Com 40 iterações a torre também fica em pé. (Não se compara a deriva instantânea com a de 10
-    // iterações: a torre balança e o instante medido cai numa fase arbitrária do balanço. A
-    // convergência com as iterações é medida no demo, pela velocidade em janela tardia.)
-    PhysicsWorld w2;
-    w2.solverSettings().velocityIterations = 40;
-    w2.createBody(groundDesc());
-    std::vector<BodyId> ids2;
-    for (int i = 0; i < N; ++i) ids2.push_back(w2.createBody(boxDesc(Vector3(0, Real(0.5) + Real(i), 0))));
-    for (int i = 0; i < 600; ++i) w2.step();
-    const Vector3 top2 = w2.getBody(ids2.back()).getWorldCenterOfMass();
-    std::printf("  [info] mesma pilha com 40 iteracoes: deriva xz=%.4f\n",
-                double(std::max(std::abs(top2.x), std::abs(top2.z))));
-    CHECK(std::max(std::abs(top2.x), std::abs(top2.z)) < Real(0.06));
-    CHECK(std::abs(top2.y - (Real(N) - Real(0.5))) < Real(0.05));
+static void testStacking() {
+    // 60 s com as configurações PADRÃO (10 iterações de velocidade, NGS). O critério NÃO é a
+    // deriva num instante qualquer (a torre balança e o instante cai numa fase arbitrária) nem
+    // "ficou parada": 10 iterações não bastam para um solver iterativo assentar 10 caixas
+    // empilhadas. Medido: em double ela assenta e dorme em ~20 s; em float oscila de forma
+    // sustentada (0,2 a 0,4 m/s por janela de 10 s, deriva <= 0,2 m), sem decair nem crescer.
+    // O critério é o que o NGS garante: continua em pé, limitada e sem crescer. (Com o Baumgarte
+    // legado, positionIterations = 0, esta torre tomba entre 20 e 40 s em float: deriva de ~19 m,
+    // porque a correção de penetração vira velocidade e bombeia o balanço.)
+    const TowerResult r = runTower(10, kPositionIterations, 60);
+    std::printf("  [info] torre de 10 caixas, 60 s, 10 iteracoes + NGS: pico de deriva=%.4f m, final=%.4f m, "
+                "erro de altura=%.4f m, %s\n", double(r.peakDrift), double(r.finalDrift), double(r.heightError),
+                r.sleeping ? "dormindo" : "acordada");
+    std::printf("  [info]   pico de velocidade por janela de 10 s: %.3f %.3f %.3f %.3f %.3f %.3f m/s\n",
+                double(r.window[0]), double(r.window[1]), double(r.window[2]), double(r.window[3]), double(r.window[4]), double(r.window[5]));
+    Real maxWindow = 0;
+    for (Real v : r.window) maxWindow = std::max(maxWindow, v);
+    CHECK(r.peakDrift < Real(0.35));                 // nunca sai de cima da base (meia caixa = 0,5 m)
+    CHECK(r.heightError < Real(0.05));               // as 10 caixas continuam empilhadas
+    CHECK(r.finalDrift < Real(0.2));
+    CHECK(maxWindow < Real(0.6));                    // balanço limitado
+    CHECK(r.window[5] <= Real(2) * std::max(r.window[1], Real(0.05)));   // e que não cresce
+    CHECK(r.touching == 10);                         // cada caixa toca a de baixo (ou o chão)
+
+    // Com mais iterações o solver CONVERGE: o pico de deriva cai e a torre assenta e adormece.
+    // (Medido em float e double: 15 iterações já assentam; 20 dão folga.)
+    const TowerResult r20 = runTower(20, kPositionIterations, 60);
+    std::printf("  [info] mesma torre com 20 iteracoes: pico de deriva=%.4f m (contra %.4f com 10), %s\n",
+                double(r20.peakDrift), double(r.peakDrift), r20.sleeping ? "dormindo" : "acordada");
+    CHECK(r20.peakDrift < r.peakDrift);
+    CHECK(r20.heightError < Real(0.05));
+    CHECK(r20.sleeping);                              // assentou
+    CHECK(r20.window[5] == Real(0));                  // dormindo: velocidade zero
 }
 
 static void testPyramid() {
@@ -490,6 +524,38 @@ static void testBounce() {
     CHECK(std::abs(peak - expectedPeak) < Real(0.15));
 }
 
+// Regressão: com restituição alta a bola tem de ASSENTAR. A restituição usava a velocidade já
+// acelerada pela gravidade do passo, então cada batida ganhava g·Δt de "impacto" e havia um ponto
+// fixo v* = e·g·Δt/(1-e) acima do velocity slop (e = 0,8: 0,65 m/s; e = 0,9: 1,5 m/s): a bola
+// pulava PARA SEMPRE com amplitude constante. Falha no motor sem a correção (para e >= 0,8).
+// O sleeping fica desligado: o que se testa é o assentamento físico, não o sono.
+static void testRestitutionSettles() {
+    for (Real e : {Real(0.5), Real(0.8), Real(0.9), Real(0.95)}) {
+        PhysicsWorld w;
+        w.sleepSettings().enabled = false;
+        w.createBody(groundDesc());
+        RigidBodyDesc d = sphereDesc(Vector3(0, 3, 0));
+        d.restitution = e;
+        const BodyId b = w.createBody(d);
+
+        int steps = 0;
+        Real maxSpeedLate = 0, minY = 100, maxY = -100;
+        for (; steps < 3600; ++steps) {   // 60 s: cobre a série de quiques de e = 0,95
+            w.step();
+            if (steps >= 3000) {          // últimos 10 s
+                const RigidBody& rb = w.getBody(b);
+                maxSpeedLate = std::max(maxSpeedLate, rb.getLinearVelocity().length());
+                minY = std::min(minY, rb.getWorldCenterOfMass().y);
+                maxY = std::max(maxY, rb.getWorldCenterOfMass().y);
+            }
+        }
+        std::printf("  [info] restituicao e=%.2f: nos ultimos 10 s |v| max = %.4f m/s, y em [%.4f, %.4f]\n", double(e),
+                    double(maxSpeedLate), double(minY), double(maxY));
+        CHECK(maxSpeedLate < Real(0.1));                          // parada, sem pulinhos
+        CHECK(minY > Real(0.48) && maxY < Real(0.52));            // assentada sobre o chão (raio 0,5)
+    }
+}
+
 static void testKinematicPlatform() {
     // Plataforma cinemática a 1 m/s carrega uma caixa só pelo atrito.
     PhysicsWorld w;
@@ -526,9 +592,9 @@ static void testJointsInWorld() {
             maxErr = std::max(maxErr, std::abs((p - Vector3(0, 5, 0)).length() - Real(2)));
             minY = std::min(minY, p.y);
         }
-        // Junta de velocidade + Baumgarte: com v ~ 6 m/s (a = v²/L ~ 17 m/s²) o comprimento oscila
-        // ~0,7 % de L (medido 1,3 cm) e volta ao repouso; o erro é limitado, não acumulativo.
-        CHECK(maxErr < Real(0.02));
+        // Com NGS (correção de posição sem velocidade) o comprimento não deriva: medido < 5e-6 m em
+        // float e double. O Baumgarte legado dava 1,3 cm a ~6 m/s (a = v²/L ~ 17 m/s²).
+        CHECK(maxErr < Real(0.002));
         CHECK(minY < Real(3.2) && minY > Real(2.9));   // desce até ~ 5 − 2 = 3
     }
     // --- Corpos ligados por junta não colidem (padrão), a menos que se peça ---------------------------
@@ -855,6 +921,7 @@ int main() {
     testStacking();
     testPyramid();
     testBounce();
+    testRestitutionSettles();
     testKinematicPlatform();
     testJointsInWorld();
     testDeterminism();

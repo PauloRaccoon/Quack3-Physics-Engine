@@ -8,6 +8,11 @@
 
 namespace physics {
 
+namespace {
+/// Limita o comprimento de `v` a `maxLen` (mesmo auxiliar de JointConstraint.cpp).
+Vector3 clampLength(const Vector3& v, Real maxLen) { return v.clampedLength(maxLen); }
+} // namespace
+
 ContactConstraint::ContactConstraint(ContactManifold* manifold, RigidBody* a, RigidBody* b)
     : Constraint(a, b), manifold_(manifold) {
     if (!manifold) throw std::invalid_argument("ContactConstraint: manifold nulo");
@@ -64,8 +69,8 @@ void ContactConstraint::prepare(const StepContext& ctx) {
         const Real depth = cp.depth;
 
         Real bias = Real(0);
-        if (depth > cfg.linearSlop) {
-            // Baumgarte com penetration slop.
+        if (depth > cfg.linearSlop && cfg.positionIterations <= 0) {
+            // Baumgarte (legado) com penetration slop. Com NGS a penetração é tratada em solvePosition().
             bias = std::min(cfg.baumgarte * ctx.invDt * (depth - cfg.linearSlop), cfg.maxBiasVelocity);
         } else if (depth < Real(0)) {
             // Contato especulativo: pode se aproximar no máximo o vão por passo.
@@ -75,8 +80,13 @@ void ContactConstraint::prepare(const StepContext& ctx) {
         // neste passo (|vn|·Δt ≥ vão). Isso vale para contato real (depth ≥ 0) e também para o
         // especulativo: sem isso, um corpo que chega com um vão de poucos mm (dentro da margem)
         // teria a velocidade zerada pelo bias de vão e perderia o quique.
-        if (vn < -cfg.velocitySlop && depth >= vn * ctx.dt) {
-            bias = std::max(bias, -restitution_ * vn);
+        //
+        // A velocidade de impacto é a de ANTES das forças deste passo (gravidade incluída): usar a
+        // velocidade já acelerada faz a bola ganhar g·Δt de "impacto" a cada batida e pular para
+        // sempre (ponto fixo v* = e·g·Δt/(1-e); e = 0,8 → 0,65 m/s, acima do slop de 0,5 m/s).
+        const Real vnImpact = vn - (B.stepDeltaAt(p.rB) - A.stepDeltaAt(p.rA)).dot(normal_);
+        if (vn < Real(0) && vnImpact < -cfg.velocitySlop && depth >= vn * ctx.dt) {
+            bias = std::max(bias, -restitution_ * vnImpact);
         }
         p.bias = bias;
 
@@ -164,10 +174,53 @@ void ContactConstraint::solveVelocity() {
 void ContactConstraint::finish() {
     for (int i = 0; i < count_; ++i) {
         ContactPoint& cp = manifold_->points[i];
-        cp.normalImpulse = points_[i].normalImpulse;
-        cp.tangentImpulse = tangent_[0] * points_[i].tangentImpulse[0] +
-                            tangent_[1] * points_[i].tangentImpulse[1];
+        // Nunca persiste impulso não finito (overflow em razões de massa extremas): viraria NaN
+        // no warm start do passo seguinte e contaminaria o par.
+        const Real n = points_[i].normalImpulse;
+        const Vector3 t = tangent_[0] * points_[i].tangentImpulse[0] + tangent_[1] * points_[i].tangentImpulse[1];
+        cp.normalImpulse = (std::isfinite(n) && n > Real(0)) ? n : Real(0);
+        cp.tangentImpulse = t.isFinite() ? t : Vector3::zero();
     }
+}
+
+// -----------------------------------------------------------------------------
+// NGS (Gauss–Seidel não linear) para a penetração.
+// Roda DEPOIS da integração das posições. Os pontos do manifold estão em coordenadas locais dos
+// corpos, então a profundidade com as poses ATUAIS sai de graça: depth = (pA − pB)·n. A correção é
+// um deslocamento de pose (não de velocidade): não gera momento, então não injeta energia — ao
+// contrário do Baumgarte, que soma uma velocidade extra que o solver não retira e que, numa torre
+// parada, bombeia o balanço até ela tombar.
+// -----------------------------------------------------------------------------
+Real ContactConstraint::solvePosition(const SolverSettings& cfg) {
+    Real worst = Real(0);
+    for (int i = 0; i < count_; ++i) {
+        const ContactPoint& cp = manifold_->points[i];
+        const Vector3 pA = bodyA_->localToWorld(cp.localA);
+        const Vector3 pB = bodyB_->localToWorld(cp.localB);
+        const Real depth = (pA - pB).dot(normal_);           // > 0: penetração
+        if (!std::isfinite(depth)) continue;
+        worst = std::max(worst, depth);
+        if (!(depth > cfg.linearSlop)) continue;             // folga/especulativo ou dentro do slop
+
+        // Correção desejada: fração β do excesso sobre o slop, limitada (penetrações enormes são
+        // resolvidas em vários passos, sem "explodir" os corpos para fora).
+        const Real C = std::min(cfg.baumgarte * (depth - cfg.linearSlop), cfg.maxLinearCorrection);
+
+        const detail::BodyState A(*bodyA_), B(*bodyB_);       // massas e inércias das poses ATUAIS
+        const Vector3 point = (pA + pB) * Real(0.5);
+        const Vector3 rA = point - A.com, rB = point - B.com;
+        const Real mass = detail::linearEffectiveMass(A, B, rA, rB, normal_);
+        if (!(mass > Real(0))) continue;
+
+        const Vector3 P = normal_ * (C * mass);               // "impulso" de posição, A→B
+        // A rotação também é limitada (maxAngularCorrection): um único contato ruim não pode girar
+        // um corpo dezenas de graus num passo (o limite já existia, mas só as juntas o usavam).
+        const Vector3 dthA = clampLength(A.invI * rA.cross(-P), cfg.maxAngularCorrection);
+        const Vector3 dthB = clampLength(B.invI * rB.cross(P), cfg.maxAngularCorrection);
+        detail::movePose(*bodyA_, -P * A.invMass, dthA);
+        detail::movePose(*bodyB_, P * B.invMass, dthB);
+    }
+    return worst;
 }
 
 } // namespace physics

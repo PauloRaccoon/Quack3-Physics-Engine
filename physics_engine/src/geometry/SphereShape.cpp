@@ -8,8 +8,9 @@
 namespace physics {
 
 SphereShape::SphereShape(Real radius) : radius_(radius) {
-    if (!std::isfinite(radius) || !(radius > Real(0))) {
-        throw std::invalid_argument("SphereShape: o raio deve ser finito e positivo");
+    if (!std::isfinite(radius) || !(radius >= kMinShapeExtent) || !(radius <= kMaxShapeExtent)) {
+        throw std::invalid_argument(
+            "SphereShape: o raio deve ser finito e estar em [kMinShapeExtent, kMaxShapeExtent]");
     }
 }
 

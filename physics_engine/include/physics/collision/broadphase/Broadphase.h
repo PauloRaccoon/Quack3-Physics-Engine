@@ -86,6 +86,16 @@ public:
         tree_.query(box, [&](ProxyId id) { return callback(id, tree_.getUserData(id)); });
     }
 
+    /// Raio contra os Fat AABBs (ver DynamicAABBTree::raycast).
+    /// `callback(ProxyId, userData, Real maxDistance)` → novo alcance máximo (< 0 para parar).
+    template <typename Callback>
+    void raycast(const Vector3& origin, const Vector3& direction, Real maxDistance, Real slack,
+                 Callback&& callback) const {
+        tree_.raycast(origin, direction, maxDistance, slack, [&](ProxyId id, Real maxDist) {
+            return callback(id, tree_.getUserData(id), maxDist);
+        });
+    }
+
     const AABB& getFatAABB(ProxyId id) const { return tree_.getFatAABB(id); }
     std::uint32_t getUserData(ProxyId id) const { return tree_.getUserData(id); }
     int getProxyCount() const { return tree_.getProxyCount(); }

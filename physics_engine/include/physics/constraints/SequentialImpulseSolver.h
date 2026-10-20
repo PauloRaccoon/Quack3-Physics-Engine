@@ -3,13 +3,14 @@
 // Solver de restrições de velocidade por impulsos sequenciais (Gauss–Seidel
 // projetado), na linha de Catto (GDC 2006/2009) e Allen Chou.
 //
-// Uso por passo (o PhysicsWorld da Fase 7 faz exatamente isto):
+// Uso por passo (o PhysicsWorld faz exatamente isto):
 //     Integrator::integrateVelocities(...)     // forças + gravidade
 //     solver.clear();
 //     solver.addContact(manifold, a, b);  ...  // um por par colidindo
 //     solver.addJoint(joint);             ...
 //     solver.solve(dt);                        // prepare → warm start → N iterações → finish
 //     Integrator::integratePositions(...)
+//     solver.solvePositions();                 // NGS: corrige penetrações/juntas movendo as poses
 //
 // Ordem dentro de cada iteração: juntas primeiro, contatos depois (contatos
 // são os mais numerosos e os que mais se beneficiam de ter a última palavra).
@@ -30,6 +31,9 @@ struct SolverStats {
     int contactPoints = 0;
     int jointConstraints = 0;
     int iterations = 0;
+    int positionIterations = 0;     ///< iterações de correção de posição (NGS) realmente executadas
+    Real maxPenetration = Real(0);  ///< maior penetração de contato medida na ÚLTIMA iteração de posição [m]
+    Real maxJointError = Real(0);   ///< maior erro de junta medido na última iteração de posição [m ou rad]
 };
 
 class SequentialImpulseSolver {
@@ -54,8 +58,14 @@ public:
     /// Registra uma junta (propriedade do chamador; deve viver até o fim de solve()).
     void addJoint(JointConstraint& joint);
 
-    /// Resolve todas as restrições. dt ≤ 0 ou não finito: não faz nada.
+    /// Resolve todas as restrições de VELOCIDADE. dt ≤ 0 ou não finito: não faz nada.
     void solve(Real dt);
+
+    /// Correção de posição (NGS): chame DEPOIS de Integrator::integratePositions, com as mesmas
+    /// restrições do solve(). Move as poses para reduzir penetrações e erros de junta, sem criar
+    /// velocidade (não injeta energia). Faz até settings().positionIterations iterações e para
+    /// cedo quando o erro já é pequeno. Com positionIterations == 0 não faz nada (Baumgarte legado).
+    void solvePositions();
 
     const SolverStats& getStats() const { return stats_; }
     std::size_t getContactCount() const { return contacts_.size(); }

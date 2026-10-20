@@ -63,6 +63,35 @@ private:
     int count_ = 0;
     std::vector<ProxyId> heap_;
 };
+
+/// Pilha LIFO de (nó, distância de entrada do raio), usada por DynamicAABBTree::raycast.
+/// Mesmo esquema da NodeStack: 128 posições inline, heap só para árvores anormalmente profundas.
+class RayStack {
+public:
+    struct Item {
+        ProxyId id;
+        Real t;
+    };
+    void push(ProxyId id, Real t) {
+        if (count_ < kInline) inline_[count_++] = Item{id, t};
+        else heap_.push_back(Item{id, t});
+    }
+    Item pop() {
+        if (!heap_.empty()) {
+            const Item it = heap_.back();
+            heap_.pop_back();
+            return it;
+        }
+        return inline_[--count_];
+    }
+    bool empty() const { return count_ == 0 && heap_.empty(); }
+
+private:
+    static constexpr int kInline = 128;
+    Item inline_[kInline];
+    int count_ = 0;
+    std::vector<Item> heap_;
+};
 } // namespace detail
 
 class DynamicAABBTree {
@@ -120,6 +149,55 @@ public:
             } else {
                 stack.push(node.child1);
                 stack.push(node.child2);
+            }
+        }
+    }
+
+    /// Raio (origem + t·direção, t ∈ [0, maxDistance]) contra os Fat AABBs, do mais
+    /// próximo para o mais distante (o filho com menor distância de entrada é
+    /// visitado primeiro). `direction` deve ser UNITÁRIA e `origin` finita.
+    /// `slack` (>= 0) infla cada AABB antes do teste: serve a quem consulta com
+    /// poses mais novas que as da árvore (ver CollisionWorld::setQuerySlack).
+    ///
+    /// `callback(ProxyId, Real maxDistance)` é chamado para cada folha cujo AABB
+    /// o raio toca dentro do alcance atual e devolve o NOVO alcance máximo:
+    ///   - o mesmo `maxDistance` para continuar sem alterar;
+    ///   - um valor menor para encurtar o raio (típico de "acertou a distância t":
+    ///     poda tudo que está além);
+    ///   - um valor NEGATIVO para parar a travessia.
+    /// NÃO pode modificar a árvore durante a consulta.
+    template <typename Callback>
+    void raycast(const Vector3& origin, const Vector3& direction, Real maxDistance, Real slack,
+                 Callback&& callback) const {
+        if (root_ == kNullProxy || !(maxDistance >= Real(0))) return;
+        detail::RayStack stack;
+        Real t;
+        if (!nodes_[static_cast<std::size_t>(root_)].aabb.fattened(slack).intersectsRay(origin, direction, maxDistance, t))
+            return;
+        stack.push(root_, t);
+        while (!stack.empty()) {
+            const detail::RayStack::Item item = stack.pop();
+            if (item.t > maxDistance) continue;   // o alcance encolheu depois de empilhar
+            const TreeNode& node = nodes_[static_cast<std::size_t>(item.id)];
+            if (node.isLeaf()) {
+                const Real next = callback(item.id, maxDistance);
+                if (next < Real(0)) return;
+                if (next < maxDistance) maxDistance = next;
+            } else {
+                Real t1 = Real(0), t2 = Real(0);
+                const bool h1 = nodes_[static_cast<std::size_t>(node.child1)].aabb.fattened(slack)
+                                    .intersectsRay(origin, direction, maxDistance, t1);
+                const bool h2 = nodes_[static_cast<std::size_t>(node.child2)].aabb.fattened(slack)
+                                    .intersectsRay(origin, direction, maxDistance, t2);
+                // O mais próximo é empilhado por último (sai primeiro).
+                if (h1 && h2) {
+                    if (t1 < t2) { stack.push(node.child2, t2); stack.push(node.child1, t1); }
+                    else         { stack.push(node.child1, t1); stack.push(node.child2, t2); }
+                } else if (h1) {
+                    stack.push(node.child1, t1);
+                } else if (h2) {
+                    stack.push(node.child2, t2);
+                }
             }
         }
     }

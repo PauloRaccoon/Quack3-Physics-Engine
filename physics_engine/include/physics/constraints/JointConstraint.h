@@ -2,9 +2,10 @@
 // JointConstraint.h
 // Juntas bilaterais (igualdade, sem limite de impulso) entre dois corpos.
 // Os pontos de ancoragem ficam em coordenadas LOCAIS ao frame de cada corpo,
-// então acompanham o corpo automaticamente. O erro de posição é corrigido por
-// Baumgarte (β/Δt · C) como velocidade de bias; os impulsos acumulados são
-// reinjetados (warm start) a cada quadro.
+// então acompanham o corpo automaticamente. O erro de posição é corrigido por NGS
+// (solvePosition, depois da integração, movendo as poses sem criar velocidade) ou, com
+// SolverSettings::positionIterations == 0, por Baumgarte (β/Δt · C) como velocidade de bias; os
+// impulsos acumulados são reinjetados (warm start) a cada quadro.
 //
 //  - BallSocketJoint : 3 linhas — os dois pontos de ancoragem coincidem
 //                      (articulação esférica, 3 graus de liberdade angulares).
@@ -47,6 +48,8 @@ public:
     ConstraintType getType() const override { return ConstraintType::BallSocket; }
     void prepare(const StepContext& ctx) override;
     void solveVelocity() override;
+    /// NGS: aproxima os dois pontos de ancoragem (erro = |pB − pA|, em metros).
+    Real solvePosition(const SolverSettings& settings) override;
 
     const Vector3& getAccumulatedImpulse() const { return impulse_; }
 
@@ -69,6 +72,8 @@ public:
     ConstraintType getType() const override { return ConstraintType::Distance; }
     void prepare(const StepContext& ctx) override;
     void solveVelocity() override;
+    /// NGS: corrige o comprimento (erro = |distância − comprimento|, em metros).
+    Real solvePosition(const SolverSettings& settings) override;
 
     Real getLength() const { return length_; }
     Real getAccumulatedImpulse() const { return impulse_; }
@@ -92,6 +97,9 @@ public:
     ConstraintType getType() const override { return ConstraintType::Hinge; }
     void prepare(const StepContext& ctx) override;
     void solveVelocity() override;
+    /// NGS: ancoragens coincidentes + eixos paralelos. Erro = o maior entre o linear [m] e o
+    /// angular [rad].
+    Real solvePosition(const SolverSettings& settings) override;
 
     /// Eixo da dobradiça no mundo, segundo cada corpo (coincidem se a junta está satisfeita).
     Vector3 getAxisA() const { return bodyA_->getTransform().transformDirection(localAxisA_); }

@@ -3,6 +3,8 @@
 // =============================================================================
 #include "physics/collision/CollisionWorld.h"
 
+#include "physics/collision/narrowphase/GJK.h"
+
 #include <stdexcept>
 #include <utility>
 
@@ -92,6 +94,7 @@ void CollisionWorld::detect() {
 
     // 2) Descarta pares separados e roda a narrowphase nos demais.
     touching_.clear();
+    frozenPairs_ = 0;
     for (auto it = pairs_.begin(); it != pairs_.end();) {
         ContactPair& cp = it->second;
         if (!broadphase_.testOverlap(cp.proxyA, cp.proxyB)) {
@@ -100,12 +103,32 @@ void CollisionWorld::detect() {
         }
         const Object& A = objects_[cp.a];
         const Object& B = objects_[cp.b];
+        if (isFrozen(A) && isFrozen(B)) {
+            // Nada se moveu desde a última vez: o manifold continua válido (e com os impulsos).
+            ++frozenPairs_;
+            if (cp.manifold.count > 0) touching_.push_back(&cp);
+            ++it;
+            continue;
+        }
         if (ContactGenerator::collide(*A.shape, A.transform, *B.shape, B.transform, cp.manifold,
                                       settings_.contact)) {
             touching_.push_back(&cp);
         }
         ++it;
     }
+}
+
+bool CollisionWorld::overlapObject(BodyId id, const Shape& shape, const Transform& xf) const {
+    if (!hasObject(id) || !xf.isFinite()) return false;
+    const Object& o = objects_[id];
+    const MinkowskiSupport support(shape, xf, *o.shape, o.transform);
+    const GJKResult r = GJK::compute(support);
+    // Núcleos que se interpenetram: sobrepõem. Senão, esferas (núcleo + raio) ainda
+    // se tocam se a distância entre os núcleos não passa da soma dos raios.
+    if (r.intersecting) return true;
+    // Sem convergência (caso degenerado): responde de forma conservadora.
+    if (!r.converged) return true;
+    return r.distance <= support.getRadiusA() + support.getRadiusB();
 }
 
 const ContactPair* CollisionWorld::findPair(BodyId a, BodyId b) const {

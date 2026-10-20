@@ -98,6 +98,7 @@ struct Scene {
         Integrator::integrateVelocities(bodies, gravity, dt);
         solver.solve(dt);
         Integrator::integratePositions(bodies, dt);
+        solver.solvePositions();   // NGS (positionIterations > 0)
     }
 
     void run(int steps) { for (int i = 0; i < steps; ++i) step(); }
@@ -142,8 +143,12 @@ static RigidBodyDesc ground() { return staticBox(Vector3(50, 1, 50), Vector3(0, 
 static void testRestitution() {
     // Esfera solta sobre o chão: o primeiro quique sai com  vy = e · |vn_impacto|  (exato:
     // o chão tem massa infinita e o bias de restituição domina a correção de posição).
+    // Os dois modos de correção de posição: NGS (padrão: a penetração é corrigida movendo as poses,
+    // sem criar velocidade) e Baumgarte legado (positionIterations = 0: a correção entra no bias).
+    for (int posIt : {kPositionIterations, 0})
     for (Real e : {Real(0.0), Real(0.3), Real(0.6), Real(0.9)}) {
         Scene s;
+        s.solver.settings().positionIterations = posIt;
         s.add(ground());
         RigidBodyDesc d = dynSphere(Real(0.5), Vector3(0, 3, 0));
         d.restitution = e;
@@ -157,9 +162,15 @@ static void testRestitution() {
             if (!s.solver.getContactCount()) continue;
             hit = true;
             const SolverSettings& cfg = s.solver.settings();
-            const Real vImpact = std::abs(vyBefore - kGravity * kDt);
-            // O alvo é o MAIOR entre restituição e correção de posição (Baumgarte c/ slop, limitado).
-            const Real baumgarte = std::min(cfg.baumgarte / kDt * (s.maxDepth - cfg.linearSlop), cfg.maxBiasVelocity);
+            // Velocidade de impacto = a do INÍCIO do passo (antes da gravidade dele). Somar g·Δt a ela
+            // (como este teste fazia) faz a restituição "acelerar" o quique a cada batida e a bola
+            // pular para sempre; ver RigidBody::getStepLinearDelta().
+            const Real vImpact = std::abs(vyBefore);
+            // O alvo é o MAIOR entre restituição e correção de posição. Só o Baumgarte legado
+            // transforma a penetração em velocidade; com NGS essa parcela é zero.
+            const Real baumgarte = cfg.positionIterations > 0
+                ? Real(0)
+                : std::min(cfg.baumgarte / kDt * (s.maxDepth - cfg.linearSlop), cfg.maxBiasVelocity);
             expected = std::max(e * vImpact, baumgarte);
             after = s[b].getLinearVelocity().y;
         }

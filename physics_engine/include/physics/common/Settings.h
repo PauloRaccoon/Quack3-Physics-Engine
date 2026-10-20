@@ -64,12 +64,27 @@ constexpr Real kLinearSlop      = Real(0.005);        ///< Penetration slop [m]
 constexpr Real kVelocitySlop    = Real(0.5);          ///< Velocity slop (restituição) [m/s]
 constexpr Real kBaumgarteFactor = Real(0.2);          ///< Fator de correção de posição (bias)
 constexpr int  kVelocityIterations = 10;              ///< Iterações do Sequential Impulse
+constexpr int  kPositionIterations = 3;               ///< Iterações da correção de posição (NGS); 0 = Baumgarte legado
+constexpr Real kMaxLinearCorrection  = Real(0.2);     ///< Correção linear máxima por iteração de posição [m]
+constexpr Real kMaxAngularCorrection = Real(0.1);     ///< Correção angular máxima por iteração de posição [rad]
 constexpr Real kAABBMargin      = Real(0.1);          ///< Margem dos Fat AABBs [m]
 constexpr Real kAABBDisplacementMultiplier = Real(2); ///< Antecipação do movimento no Fat AABB
 
 constexpr Real kGravity         = Real(9.81);         ///< Aceleração da gravidade [m/s²]
 constexpr Real kMaxLinearSpeed  = Real(200);          ///< Limite de velocidade linear [m/s]
 constexpr Real kMaxAngularSpeed = Real(100);          ///< Limite de velocidade angular [rad/s]
+
+/// Dimensões de forma suportadas [m] (raio da esfera, semi-extents da caixa). Abaixo do mínimo
+/// a área das faces underflowa/degenera; acima do máximo, volume e inércia estouram em float.
+/// Fora do intervalo as formas lançam std::invalid_argument.
+constexpr Real kMinShapeExtent  = Real(1e-4);
+constexpr Real kMaxShapeExtent  = Real(1e5);
+/// Teto do coeficiente de atrito (a mistura sqrt(μa·μb) com valores astronômicos daria inf).
+constexpr Real kMaxFriction     = Real(1e3);
+/// |coordenada| máxima suportada [m] para posições, centros de massa e offsets locais. Além disso
+/// (a precisão de float já é de ~0,06 m a 1e6) somas e rotações podem estourar para Inf. Poses e
+/// massas fora do limite são recusadas (invalid_argument) ou ignoradas (setters).
+constexpr Real kMaxCoordinate   = Real(1e6);
 
 // -----------------------------------------------------------------------------
 // Narrowphase (GJK / EPA / contatos)

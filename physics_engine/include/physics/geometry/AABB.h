@@ -11,6 +11,7 @@
 #pragma once
 
 #include <algorithm>
+#include <utility>
 
 #include "physics/common/Settings.h"
 #include "physics/math/Transform.h"
@@ -66,6 +67,35 @@ struct AABB {
     bool overlaps(const AABB& o) const {
         return min.x <= o.max.x && max.x >= o.min.x && min.y <= o.max.y && max.y >= o.min.y &&
                min.z <= o.max.z && max.z >= o.min.z;
+    }
+
+    /// Raio (origem + t·direção, t em [0, maxDistance]) contra o AABB, pelo método
+    /// dos "slabs". `direction` deve ser UNITÁRIA e `origin` finita (o chamador
+    /// valida: NaN aqui produziria um falso positivo). Componentes de direção
+    /// ~0 (raio paralelo a um par de faces) só passam se a origem está entre as
+    /// faces. Em caso de interseção, `tEnter` recebe a distância de entrada
+    /// (0 se a origem está dentro do AABB). AABB inválido (vazio) nunca intersecta.
+    bool intersectsRay(const Vector3& origin, const Vector3& direction, Real maxDistance,
+                       Real& tEnter) const {
+        if (!isValid()) return false;
+        Real tmin = Real(0);
+        Real tmax = maxDistance;
+        for (int i = 0; i < 3; ++i) {
+            const Real d = direction[i];
+            if (std::abs(d) < kDivideEpsilon) {
+                if (origin[i] < min[i] || origin[i] > max[i]) return false;
+            } else {
+                const Real inv = Real(1) / d;
+                Real t1 = (min[i] - origin[i]) * inv;
+                Real t2 = (max[i] - origin[i]) * inv;
+                if (t1 > t2) std::swap(t1, t2);
+                if (t1 > tmin) tmin = t1;
+                if (t2 < tmax) tmax = t2;
+                if (tmin > tmax) return false;
+            }
+        }
+        tEnter = tmin;
+        return true;
     }
 
     // --- Modificação ------------------------------------------------------------

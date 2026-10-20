@@ -10,10 +10,7 @@ namespace physics {
 namespace {
 
 /// Limita o comprimento de `v` a `maxLen`.
-Vector3 clampLength(const Vector3& v, Real maxLen) {
-    const Real lsq = v.lengthSquared();
-    return lsq > maxLen * maxLen ? v * (maxLen / std::sqrt(lsq)) : v;
-}
+Vector3 clampLength(const Vector3& v, Real maxLen) { return v.clampedLength(maxLen); }
 
 /// Matriz de massa efetiva 3×3 de uma junta de ponto:
 ///   K = (1/mA + 1/mB) Id − [rA]× IA⁻¹ [rA]× − [rB]× IB⁻¹ [rB]×
@@ -47,7 +44,10 @@ void BallSocketJoint::prepare(const StepContext& ctx) {
     invK_ = pointMassInverse(A, B, rA_, rB_);
 
     // Erro de posição C = pB − pA → velocidade de correção β/Δt · C.
-    bias_ = clampLength((pB - pA) * (ctx.settings.baumgarte * ctx.invDt), ctx.settings.maxBiasVelocity);
+    // (Com NGS, positionIterations > 0, o erro é tratado em solvePosition: sem bias de velocidade.)
+    bias_ = ctx.settings.positionIterations > 0
+                ? Vector3::zero()
+                : clampLength((pB - pA) * (ctx.settings.baumgarte * ctx.invDt), ctx.settings.maxBiasVelocity);
 
     if (ctx.settings.warmStarting && impulse_.isFinite()) {
         A.applyImpulse(-impulse_, rA_);
@@ -78,7 +78,9 @@ void BallSocketJoint::solveVelocity() {
 DistanceJoint::DistanceJoint(RigidBody* a, RigidBody* b, const Vector3& worldAnchorA,
                              const Vector3& worldAnchorB, Real length)
     : JointConstraint(a, b), length_(length) {
-    if (!std::isfinite(length)) throw std::invalid_argument("DistanceJoint: comprimento nao finito");
+    if (!std::isfinite(length) || length > kMaxCoordinate) {
+        throw std::invalid_argument("DistanceJoint: comprimento nao finito ou maior que kMaxCoordinate");
+    }
     localAnchorA_ = a->worldToLocal(worldAnchorA);
     localAnchorB_ = b->worldToLocal(worldAnchorB);
     if (length_ < Real(0)) length_ = worldAnchorA.distance(worldAnchorB);
@@ -103,8 +105,10 @@ void DistanceJoint::prepare(const StepContext& ctx) {
     }
 
     const Real C = len - length_;
-    bias_ = clamp(ctx.settings.baumgarte * ctx.invDt * C, -ctx.settings.maxBiasVelocity,
-                  ctx.settings.maxBiasVelocity);
+    bias_ = ctx.settings.positionIterations > 0
+                ? Real(0)
+                : clamp(ctx.settings.baumgarte * ctx.invDt * C, -ctx.settings.maxBiasVelocity,
+                        ctx.settings.maxBiasVelocity);
 
     if (ctx.settings.warmStarting && std::isfinite(impulse_)) {
         const Vector3 P = n_ * impulse_;
@@ -154,7 +158,9 @@ void HingeJoint::prepare(const StepContext& ctx) {
     rA_ = pA - A.com;
     rB_ = pB - B.com;
     invK_ = pointMassInverse(A, B, rA_, rB_);
-    linearBias_ = clampLength((pB - pA) * (ctx.settings.baumgarte * ctx.invDt), ctx.settings.maxBiasVelocity);
+    linearBias_ = ctx.settings.positionIterations > 0
+                      ? Vector3::zero()
+                      : clampLength((pB - pA) * (ctx.settings.baumgarte * ctx.invDt), ctx.settings.maxBiasVelocity);
 
     // --- Parte angular (eixos paralelos) --------------------------------------------------------------
     // p1,p2 ⟂ eixoA. Com C_i = eixoB · p_i (≈ ângulo de desalinhamento), a derivada é
@@ -168,8 +174,10 @@ void HingeJoint::prepare(const StepContext& ctx) {
         q_[i] = axisA.cross(p[i]);
         angularMass_[i] = safeInverse(q_[i].dot(invISum * q_[i]));
         const Real C = axisB.dot(p[i]);
-        angularBias_[i] = clamp(ctx.settings.baumgarte * ctx.invDt * C, -ctx.settings.maxBiasVelocity,
-                                ctx.settings.maxBiasVelocity);
+        angularBias_[i] = ctx.settings.positionIterations > 0
+                              ? Real(0)
+                              : clamp(ctx.settings.baumgarte * ctx.invDt * C, -ctx.settings.maxBiasVelocity,
+                                      ctx.settings.maxBiasVelocity);
     }
 
     // --- Warm start ---------------------------------------------------------------------------------------
@@ -213,6 +221,85 @@ void HingeJoint::solveVelocity() {
 
     A.store(*bodyA_);
     B.store(*bodyB_);
+}
+
+// =============================================================================
+// NGS: correção de posição das juntas (depois da integração das posições)
+// =============================================================================
+namespace {
+
+/// Correção de ponto: move os corpos para que as ancoragens pA (em A) e pB (em B) coincidam.
+/// Usa o erro inteiro (limitado), pois o passe converge sem precisar do fator β dos contatos.
+/// Retorna |pB − pA| medido antes da correção.
+Real correctPointError(RigidBody& bodyA, RigidBody& bodyB, const Vector3& localAnchorA,
+                       const Vector3& localAnchorB, const SolverSettings& cfg) {
+    const detail::BodyState A(bodyA), B(bodyB);
+    const Vector3 pA = bodyA.localToWorld(localAnchorA), pB = bodyB.localToWorld(localAnchorB);
+    const Vector3 C = pB - pA;
+    const Real err = C.length();
+    if (!std::isfinite(err) || !(err > Real(0))) return std::isfinite(err) ? err : Real(0);
+
+    const Vector3 rA = pA - A.com, rB = pB - B.com;
+    const Matrix3 invK = pointMassInverse(A, B, rA, rB);
+    const Vector3 P = invK * (-clampLength(C, cfg.maxLinearCorrection));
+    if (!P.isFinite()) return err;
+
+    detail::movePose(bodyA, -P * A.invMass, A.invI * rA.cross(-P));
+    detail::movePose(bodyB, P * B.invMass, B.invI * rB.cross(P));
+    return err;
+}
+
+} // namespace
+
+Real BallSocketJoint::solvePosition(const SolverSettings& cfg) {
+    return correctPointError(*bodyA_, *bodyB_, localAnchorA_, localAnchorB_, cfg);
+}
+
+Real DistanceJoint::solvePosition(const SolverSettings& cfg) {
+    const detail::BodyState A(*bodyA_), B(*bodyB_);
+    const Vector3 pA = getAnchorA(), pB = getAnchorB();
+    const Vector3 d = pB - pA;
+    const Real len = d.length();
+    if (!std::isfinite(len) || len <= kNormalizeEpsilonSq) return Real(0);   // direção indefinida
+
+    const Real C = len - length_;
+    const Vector3 n = d / len;
+    const Vector3 rA = pA - A.com, rB = pB - B.com;
+    const Real mass = detail::linearEffectiveMass(A, B, rA, rB, n);
+    const Real lambda = -mass * clamp(C, -cfg.maxLinearCorrection, cfg.maxLinearCorrection);
+    if (!std::isfinite(lambda)) return std::abs(C);
+
+    const Vector3 P = n * lambda;
+    detail::movePose(*bodyA_, -P * A.invMass, A.invI * rA.cross(-P));
+    detail::movePose(*bodyB_, P * B.invMass, B.invI * rB.cross(P));
+    return std::abs(C);
+}
+
+Real HingeJoint::solvePosition(const SolverSettings& cfg) {
+    // --- Angular: eixos paralelos (as 2 linhas somadas e aplicadas de uma vez) ----------------------
+    Real angularErr = Real(0);
+    {
+        const detail::BodyState A(*bodyA_), B(*bodyB_);
+        const Vector3 axisA = getAxisA(), axisB = getAxisB();
+        Vector3 p[2];
+        computeOrthonormalBasis(axisA, p[0], p[1]);
+        const Matrix3 invISum = A.invI + B.invI;
+        Vector3 L;   // "impulso" angular de posição total (mundo), A→B
+        for (int i = 0; i < 2; ++i) {
+            const Vector3 q = axisA.cross(p[i]);
+            const Real mass = safeInverse(q.dot(invISum * q));
+            const Real C = axisB.dot(p[i]);                   // ≈ ângulo de desalinhamento
+            angularErr = std::max(angularErr, std::abs(C));
+            L += q * (-mass * clamp(C, -cfg.maxAngularCorrection, cfg.maxAngularCorrection));
+        }
+        if (L.isFinite() && L.lengthSquared() > Real(0)) {
+            detail::movePose(*bodyA_, Vector3::zero(), A.invI * (-L));
+            detail::movePose(*bodyB_, Vector3::zero(), B.invI * L);
+        }
+    }
+    // --- Linear: ancoragens coincidentes (com as poses já giradas) ------------------------------------
+    const Real linearErr = correctPointError(*bodyA_, *bodyB_, localAnchorA_, localAnchorB_, cfg);
+    return std::max(linearErr, angularErr);
 }
 
 } // namespace physics

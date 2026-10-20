@@ -9,16 +9,26 @@ namespace physics {
 
 RigidBody::RigidBody(const RigidBodyDesc& desc)
     : shape_(desc.shape),
-      friction_(desc.friction < Real(0) ? Real(0) : desc.friction),
+      friction_(clamp(desc.friction, Real(0), kMaxFriction)),
       restitution_(clamp(desc.restitution, Real(0), Real(1))),
       linearDamping_(desc.linearDamping < Real(0) ? Real(0) : desc.linearDamping),
       angularDamping_(desc.angularDamping < Real(0) ? Real(0) : desc.angularDamping),
       gravityScale_(desc.gravityScale),
       type_(desc.type),
-      userData_(desc.userData) {
+      userData_(desc.userData),
+      awake_(desc.type != BodyType::Static),
+      allowSleep_(desc.allowSleep) {
     if (!desc.transform.isFinite() || !desc.linearVelocity.isFinite() ||
         !desc.angularVelocity.isFinite()) {
         throw std::invalid_argument("RigidBody: transformacao/velocidades nao finitas");
+    }
+    if (!desc.transform.position.isWithin(kMaxCoordinate)) {
+        throw std::invalid_argument("RigidBody: posicao fora de [-kMaxCoordinate, kMaxCoordinate]");
+    }
+    // NaN/Inf passariam pelos clamps acima e contaminariam a simulação: recusa a descrição.
+    if (!isFinite(desc.friction) || !isFinite(desc.restitution) || !isFinite(desc.linearDamping) ||
+        !isFinite(desc.angularDamping) || !isFinite(desc.gravityScale)) {
+        throw std::invalid_argument("RigidBody: atrito/restituicao/amortecimento/gravityScale nao finitos");
     }
 
     // --- Massa --------------------------------------------------------------------
@@ -57,13 +67,14 @@ void RigidBody::updateDerived() {
 }
 
 void RigidBody::setTransform(const Transform& frame) {
-    if (!frame.isFinite()) return;
+    if (!frame.isFinite() || !frame.position.isWithin(kMaxCoordinate)) return;
     const Quaternion q = frame.rotation.normalized();
     setPose(frame.position + q.rotate(massData_.centerOfMass), q);
 }
 
 void RigidBody::setPose(const Vector3& worldCenterOfMass, const Quaternion& orientation) {
-    if (!worldCenterOfMass.isFinite() || !orientation.isFinite()) return;
+    if (!worldCenterOfMass.isWithin(kMaxCoordinate) || !orientation.isFinite()) return;
+    wake();
     position_ = worldCenterOfMass;
     orientation_ = orientation.normalized();
     updateDerived();
@@ -71,11 +82,29 @@ void RigidBody::setPose(const Vector3& worldCenterOfMass, const Quaternion& orie
 
 void RigidBody::setMassData(const MassData& data) {
     if (!isDynamic()) return;
+    // MassData montada à mão pode trazer NaN/Inf ou valores absurdos: ignora (estado intacto).
+    if (!isFinite(data.mass) || !isFinite(data.invMass) || data.mass < Real(0) || data.invMass < Real(0) ||
+        !data.centerOfMass.isWithin(kMaxCoordinate) || !data.inertia.isFinite() || !data.invInertia.isFinite()) {
+        return;
+    }
     // Mantém o frame do corpo fixo: o centro de massa pode mudar de lugar.
     const Transform frame = transform_;
     massData_ = data;
     invMass_ = data.invMass;
-    setTransform(frame);
+    setTransform(frame);   // (acorda o corpo)
+}
+
+void RigidBody::setAwake(bool awake) {
+    if (type_ != BodyType::Dynamic) return;
+    if (awake) {
+        wake();
+        return;
+    }
+    awake_ = false;
+    sleepTime_ = Real(0);
+    linearVelocity_ = Vector3::zero();
+    angularVelocity_ = Vector3::zero();
+    clearForces();
 }
 
 Real RigidBody::getKineticEnergy() const {

@@ -12,6 +12,14 @@ namespace {
 
 constexpr Real kDuplicateEpsSq = detail::kIsSinglePrecision ? Real(1e-12) : Real(1e-24);
 
+/// Fator de RUÍDO numérico relativo: distâncias abaixo de  kGJKNoiseFactor · (maior coordenada do
+/// simplex)  não se distinguem de zero em ponto flutuante. Com formas grandes (um chão de 100 m
+/// tem diferença de Minkowski com coordenadas ~70 m) 1 ulp já passa de 1e-5 m, mais que o limiar
+/// ABSOLUTO kGJKOriginEpsilonSq: a origem sobre o simplex aparecia como "a 1e-5 m", o suporte
+/// seguinte repetia um vértice (a direção −v é só ruído) e o laço terminava declarando SEPARAÇÃO.
+/// O contato gerado a partir daí tinha normal arbitrária e profundidade de dezenas de metros.
+constexpr Real kGJKNoiseFactor = Real(16) * kEpsilon;
+
 /// Reduz o simplex ao vértice `i`.
 inline void keepOne(Simplex& s, Real* lam, int i) {
     s.v[0] = s.v[i];
@@ -215,6 +223,19 @@ GJKResult GJK::compute(const MinkowskiSupport& support) {
         if (duplicate) break;
 
         sx.add(w);
+    }
+
+    // O laço parou por estagnação (convergência, ponto repetido ou limite de iterações). Se a origem
+    // está no nível do RUÍDO numérico do simplex, as formas se tocam/penetram: é interseção, e o EPA
+    // (que aceita simplex de 1 a 3 pontos) dá a normal e a profundidade. Declarar separação aqui
+    // usaria uma direção (v) que é só ruído.
+    {
+        Real mag2 = Real(0);
+        for (int i = 0; i < sx.size; ++i) mag2 = std::max(mag2, sx.v[i].point.lengthSquared());
+        if (v.lengthSquared() <= kGJKNoiseFactor * kGJKNoiseFactor * mag2) {
+            r.intersecting = true;
+            return r;
+        }
     }
 
     // Separados: pontos mais próximos em A e B pelas baricêntricas do simplex reduzido.

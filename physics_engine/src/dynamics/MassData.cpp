@@ -11,8 +11,8 @@ MassData MassData::fromMassAndInertia(Real mass, const Matrix3& inertia, const V
     if (!std::isfinite(mass) || !(mass > Real(0))) {
         throw std::invalid_argument("MassData: a massa deve ser positiva e finita");
     }
-    if (!inertia.isFinite() || !com.isFinite()) {
-        throw std::invalid_argument("MassData: inercia/centro de massa nao finitos");
+    if (!inertia.isFinite() || !com.isWithin(kMaxCoordinate)) {
+        throw std::invalid_argument("MassData: inercia nao finita ou centro de massa fora de [-kMaxCoordinate, kMaxCoordinate]");
     }
     MassData d;
     d.mass = mass;

@@ -1,0 +1,8 @@
+@PACKAGE_INIT@
+
+# Precisão com que esta instalação foi compilada. O alvo physics::physics já propaga
+# a definição PHYSICS_USE_DOUBLE; use esta variável para conferir/avisar.
+set(PHYSICS_USE_DOUBLE @PHYSICS_USE_DOUBLE@)
+
+include("${CMAKE_CURRENT_LIST_DIR}/physicsTargets.cmake")
+check_required_components(physics)

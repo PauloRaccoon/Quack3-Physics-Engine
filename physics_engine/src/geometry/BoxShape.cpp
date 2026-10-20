@@ -11,8 +11,10 @@ namespace physics {
 
 BoxShape::BoxShape(const Vector3& halfExtents) : halfExtents_(halfExtents) {
     for (int i = 0; i < 3; ++i) {
-        if (!std::isfinite(halfExtents[i]) || !(halfExtents[i] > Real(0))) {
-            throw std::invalid_argument("BoxShape: semi-extents devem ser finitos e positivos");
+        if (!std::isfinite(halfExtents[i]) || !(halfExtents[i] >= kMinShapeExtent) ||
+            !(halfExtents[i] <= kMaxShapeExtent)) {
+            throw std::invalid_argument(
+                "BoxShape: semi-extents devem ser finitos e estar em [kMinShapeExtent, kMaxShapeExtent]");
         }
     }
 

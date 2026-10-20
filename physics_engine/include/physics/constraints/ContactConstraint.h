@@ -10,7 +10,9 @@
 // Convenção: n aponta de A para B; velocidade relativa no ponto
 //   v_rel = (vB + ωB × rB) − (vA + ωA × rA),   vn = v_rel · n.
 // O contato exige vn ≥ bias, onde o bias combina:
-//   - correção de penetração (Baumgarte com PENETRATION SLOP):
+//   - correção de penetração: com positionIterations > 0 (padrão) NÃO entra no bias; é feita por
+//     NGS depois da integração (solvePosition), movendo as poses sem criar velocidade. Com
+//     positionIterations == 0 (legado) é Baumgarte com PENETRATION SLOP:
 //         β/Δt · max(profundidade − slop, 0)           (limitado a maxBiasVelocity)
 //   - restituição, só se a velocidade de impacto passa do VELOCITY SLOP e a
 //     aproximação alcança o contato neste passo (vale também para contato
@@ -49,6 +51,9 @@ public:
     void prepare(const StepContext& ctx) override;
     void solveVelocity() override;
     void finish() override;
+    /// NGS: com as poses atuais, empurra os corpos para fora da penetração (≥ slop).
+    /// Retorna a maior penetração medida.
+    Real solvePosition(const SolverSettings& settings) override;
 
     const ContactManifold* getManifold() const { return manifold_; }
     int getPointCount() const { return count_; }

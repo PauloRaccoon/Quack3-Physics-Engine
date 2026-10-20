@@ -3,6 +3,7 @@
 // =============================================================================
 #include "physics/constraints/SequentialImpulseSolver.h"
 
+#include <algorithm>
 #include <cmath>
 
 namespace physics {
@@ -63,6 +64,31 @@ void SequentialImpulseSolver::solve(Real dt) {
         stats_.contactPoints += c.getPointCount();
     }
     for (JointConstraint* j : joints_) j->finish();
+}
+
+void SequentialImpulseSolver::solvePositions() {
+    stats_.positionIterations = 0;
+    stats_.maxPenetration = Real(0);
+    stats_.maxJointError = Real(0);
+    const int iterations = settings_.positionIterations;
+    if (iterations <= 0) return;
+
+    // Tolerâncias de parada: contatos aceitam até 3·slop (como o Box2D); juntas, 1·slop.
+    const Real contactTolerance = settings_.linearSlop * Real(3);
+    const Real jointTolerance = settings_.linearSlop;
+
+    for (int it = 0; it < iterations; ++it) {
+        Real jointError = Real(0), contactError = Real(0);
+        for (JointConstraint* j : joints_) {
+            if (j->isActive()) jointError = std::max(jointError, j->solvePosition(settings_));
+        }
+        for (ContactConstraint& c : contacts_) contactError = std::max(contactError, c.solvePosition(settings_));
+
+        ++stats_.positionIterations;
+        stats_.maxJointError = jointError;
+        stats_.maxPenetration = contactError;
+        if (contactError <= contactTolerance && jointError <= jointTolerance) break;
+    }
 }
 
 } // namespace physics

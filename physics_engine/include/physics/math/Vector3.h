@@ -5,6 +5,7 @@
 // =============================================================================
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <iosfwd>
 
@@ -84,6 +85,23 @@ struct Vector3 {
 
     // --- Consultas ---------------------------------------------------------------
     bool isFinite() const { return std::isfinite(x) && std::isfinite(y) && std::isfinite(z); }
+    /// true se TODAS as componentes são finitas e |c| <= limit (NaN/Inf => false).
+    bool isWithin(Real limit) const { return std::abs(x) <= limit && std::abs(y) <= limit && std::abs(z) <= limit; }
+
+    /// Limita |v| a `maxLen` preservando a direção. À prova de overflow: o quadrado do módulo de um
+    /// vetor com componentes ~1e30 estoura em float (e o fator maxLen/inf zerava o vetor); aqui a
+    /// maior componente decide primeiro. Vetor não finito => zero. maxLen <= 0 => zero.
+    Vector3 clampedLength(Real maxLen) const {
+        if (!isFinite() || !(maxLen > Real(0))) return Vector3(Real(0), Real(0), Real(0));
+        const Real big = std::max(std::abs(x), std::max(std::abs(y), std::abs(z)));
+        if (big > maxLen) {
+            // |v| >= maior componente > maxLen: reduz à escala unitária antes de elevar ao quadrado.
+            const Vector3 u(x / big, y / big, z / big);
+            return u * (maxLen / std::sqrt(u.x * u.x + u.y * u.y + u.z * u.z));
+        }
+        const Real lsq = x * x + y * y + z * z;   // |c| <= maxLen: não estoura
+        return lsq > maxLen * maxLen ? *this * (maxLen / std::sqrt(lsq)) : *this;
+    }
     bool isZero(Real eps = kCompareEpsilon) const { return lengthSquared() <= eps * eps; }
 
     bool nearlyEqual(const Vector3& o, Real eps = kCompareEpsilon) const {

@@ -10,6 +10,7 @@
 #include "physics/collision/narrowphase/EPA.h"
 #include "physics/collision/narrowphase/GJK.h"
 #include "physics/collision/narrowphase/SupportFunction.h"
+#include "physics/geometry/HalfEdgeStructure.h"
 #include "physics/geometry/SphereShape.h"
 
 namespace physics {
@@ -86,14 +87,19 @@ int ContactManifold::chooseDiscard(const ContactPoint& incoming) const {
     for (int i = 1; i < 5; ++i) if (depth[i] > depth[deepest]) deepest = i;
 
     // Descarta o candidato (≠ mais profundo) cuja ausência deixa a maior área.
-    int discard = -1;
-    Real bestArea = Real(-1);
+    // Começa por um candidato VÁLIDO (o primeiro que não é o mais profundo): com coordenadas
+    // absurdas o produto vetorial pode estourar para Inf e a área virar NaN, e NaN nunca vence
+    // uma comparação — sem este valor inicial o retorno seria -1 e o chamador escreveria em
+    // points[-1] (corrupção de memória, achada por fuzzing).
+    int discard = (deepest == 0) ? 1 : 0;
+    Real bestArea = -kRealMax;
     for (int r = 0; r < 5; ++r) {
         if (r == deepest) continue;
         const Vector3* q[4];
         int n = 0;
         for (int i = 0; i < 5; ++i) if (i != r) q[n++] = pos[i];
-        const Real area = quadArea(*q[0], *q[1], *q[2], *q[3]);
+        Real area = quadArea(*q[0], *q[1], *q[2], *q[3]);
+        if (std::isnan(area)) area = Real(0);   // área indefinida: pior que qualquer área real
         if (area > bestArea) {
             bestArea = area;
             discard = r;
@@ -124,7 +130,7 @@ int ContactManifold::addPoint(const Transform& xfA, const Transform& xfB, const 
 
     // 3) Cheio: descarta o que menos contribui para a área.
     const int r = chooseDiscard(np);
-    if (r == kMaxManifoldPoints) return -1;   // o próprio contato novo é o menos útil
+    if (r < 0 || r >= kMaxManifoldPoints) return -1;   // o próprio contato novo é o menos útil
     points[r] = np;
     return r;
 }
@@ -361,6 +367,95 @@ int clipFaces(const Shape& a, const Transform& xfA, const Shape& b, const Transf
     return nc;
 }
 
+/// VALIDAÇÃO E REPARO do eixo de contato (rede de segurança contra GJK/EPA imprecisos).
+///
+/// O GJK em ponto flutuante perde precisão com formas grandes: um chão de 100 m tem diferença de
+/// Minkowski com coordenadas de dezenas de metros, e a 1 ulp (~1e-5 m em float) já não distingue
+/// uma folga ou penetração de décimos de milímetro. Medido: ~0,3 % das micro-penetrações caixa ×
+/// chão de 101 m davam normal arbitrária ou profundidade de dezenas de metros (até 500 m).
+/// Um contato assim empurra um corpo em repouso para o lado e basta UM quadro para derrubar uma pilha.
+///
+/// Para a diferença de Minkowski A ⊖ B, h(d) = max_{p ∈ A⊖B} p·d é a sobreposição das formas ao longo
+/// do eixo d (A→B): > 0 penetra, < 0 há folga. A profundidade mínima de penetração é min_d h(d). Logo:
+///   1) CONSISTÊNCIA: h(n) tem que coincidir com a profundidade reportada;
+///   2) OTIMALIDADE: nenhum eixo de face de A ou de B pode ter h MENOR que a profundidade reportada
+///      (se tiver, o reportado não é o mínimo — é o caso "consistente mas errado": normal lateral e
+///      profundidade de 50 m, que é um eixo de separação válido, só que péssimo).
+/// Se uma das duas falha, troca pelo melhor eixo de face, que é válido por construção. Resultados
+/// corretos não são alterados (a troca só ocorre se existe um eixo estritamente melhor/consistente,
+/// acima da tolerância numérica). Custo: ~1 + 6 chamadas de suporte para duas caixas.
+void refineContactAxis(const MinkowskiSupport& S, const Shape& a, const Transform& xfA, const Shape& b,
+                       const Transform& xfB, Vector3& n, Real& depth, Vector3& pA, Vector3& pB) {
+    constexpr int kMaxFacesChecked = 64;   // poliedros enormes: só os primeiros (é uma rede de segurança)
+
+    Vector3 bestAxis;
+    SupportPoint bestW;
+    Real bestH = kRealMax;
+    bool haveBest = false;
+    Real scale = Real(0);   // maior coordenada vista: define o ruído numérico
+
+    auto consider = [&](const Vector3& axis) {
+        const SupportPoint w = S.support(axis);
+        const Real h = w.point.dot(axis);
+        scale = std::max(scale, w.point.abs().maxComponent());
+        if (std::isfinite(h) && (!haveBest || h < bestH)) {
+            haveBest = true;
+            bestH = h;
+            bestAxis = axis;
+            bestW = w;
+        }
+    };
+
+    // Eixos candidatos: normais de face de A e de B, com o sinal que aponta de A para B. Com os
+    // centros (quase) coincidentes o sinal é ambíguo e valem os dois.
+    const Vector3 dirAB = xfB.position - xfA.position;
+    const Real dirLen = dirAB.length();
+    auto addFaces = [&](const Shape& sh, const Transform& xf) {
+        const HalfEdgeStructure* he = sh.getHalfEdgeStructure();
+        if (he == nullptr) return;
+        const int nf = std::min(he->getFaceCount(), kMaxFacesChecked);
+        for (int i = 0; i < nf; ++i) {
+            const Vector3 w = xf.transformDirection(he->getFace(i).normal);
+            const Real d = w.dot(dirAB);
+            if (!(dirLen > Real(1e-6)) || std::abs(d) <= Real(1e-3) * dirLen) {
+                consider(w);
+                consider(-w);
+            } else {
+                consider(d > Real(0) ? w : -w);
+            }
+        }
+    };
+    addFaces(a, xfA);
+    addFaces(b, xfB);
+    if (!haveBest) return;
+
+    const SupportPoint wN = S.support(n);
+    const Real hN = wN.point.dot(n);
+    scale = std::max(scale, wN.point.abs().maxComponent());
+    const Real tol = std::max(Real(0.1) * kLinearSlop, Real(64) * kEpsilon * scale);
+
+    // O resultado JÁ concorda com o melhor eixo de face (mesma direção até ~1°, mesma profundidade)?
+    // Então está certo e não há o que reparar. Esta checagem vem ANTES do teste de consistência
+    // porque h(n) é medida no ponto de suporte mais distante: numa forma grande (chão de 50 m) a
+    // inclinação de ~1e-5 rad que o GJK deixa em n é multiplicada pela extensão e já passa da
+    // tolerância (1,8 mm contra 0,5 mm), e o refino "consertava" contatos perfeitos — trocando o
+    // ponto de contato por um canto do chão (medido: 27 % dos contatos esfera × chão em float).
+    if (n.dot(bestAxis) >= Real(0.9998) && std::abs(depth - bestH) <= tol) return;
+
+    const bool inconsistent = !(std::abs(hN - depth) <= tol);   // também pega NaN
+    const bool notMinimal = bestH < depth - tol;
+    if (!inconsistent && !notMinimal) return;
+
+    n = bestAxis;
+    depth = bestH;
+    // Posição do contato: o GJK/EPA erra bem mais o EIXO que a posição lateral, então mantém o ponto
+    // original se ele está sobre A (no AABB de A com folga). Só se não estiver cai no ponto de
+    // suporte — que numa forma grande é um canto a dezenas de metros do contato de verdade.
+    const AABB boxA = a.computeAABB(xfA).fattened(Real(0.05));
+    if (!(pA.isFinite() && boxA.contains(pA))) pA = bestW.a;
+    pB = pA - n * depth;   // mantém pA − pB = n · depth
+}
+
 } // namespace
 
 bool ContactGenerator::generate(const Shape& a, const Transform& xfA, const Shape& b,
@@ -391,26 +486,33 @@ bool ContactGenerator::generate(const Shape& a, const Transform& xfA, const Shap
     const Real rB = support.getRadiusB();
 
     const GJKResult g = GJK::compute(support);
-    Vector3 n, pA, pB;
-    Real depth;
 
+    // Normal (A→B), penetração (> 0) ou −folga (< 0) e pontos de contato dos NÚCLEOS (sem os raios).
+    Vector3 n, pA, pB;
+    Real depthCore;
     if (!g.intersecting) {
         if (!(g.distance < kRealMax) || !(g.distance > Real(0))) return false;   // inválido
-        const Real separation = g.distance - rA - rB;
-        if (!(separation <= st.contactMargin)) return false;
         // v = closestA − closestB ⇒ A→B é o oposto.
         n = (g.closestB - g.closestA) / g.distance;
-        pA = g.closestA + n * rA;
-        pB = g.closestB - n * rB;
-        depth = -separation;
+        pA = g.closestA;
+        pB = g.closestB;
+        depthCore = -g.distance;
     } else {
         const EPAResult e = EPA::compute(support, g.simplex);
         if (!e.valid) return false;
         n = e.normal;
-        pA = e.pointA + n * rA;
-        pB = e.pointB - n * rB;
-        depth = e.depth + rA + rB;
+        pA = e.pointA;
+        pB = e.pointB;
+        depthCore = e.depth;
     }
+    if (!n.isFinite() || !pA.isFinite() || !pB.isFinite() || !std::isfinite(depthCore)) return false;
+
+    refineContactAxis(support, a, xfA, b, xfB, n, depthCore, pA, pB);   // rede de segurança numérica
+
+    const Real depth = depthCore + rA + rB;
+    if (!(depth >= -st.contactMargin)) return false;   // separados por mais que a margem
+    pA = pA + n * rA;
+    pB = pB - n * rB;
     if (!n.isFinite() || !pA.isFinite() || !pB.isFinite() || !std::isfinite(depth)) return false;
 
     // Ponto único (EPA / GJK) — o fallback sempre disponível.
