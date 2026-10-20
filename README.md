@@ -31,7 +31,7 @@ projeto/
 | 7 | `pipeline/` (PhysicsWorld), `bridge/` (MotionState), `examples/main.cpp` | feita |
 | 8 | raycast, overlap, debug draw, fuzzing, endurecimento da API, `install()` | feita |
 | 9 | eventos de contato, *sleeping* com ilhas, correção de posição (NGS), perfilamento por fase | feita |
-| V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita (compilou e rodou no Windows do usuário) |
+| V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita |
 | V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita |
 | V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita |
 | V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita |
