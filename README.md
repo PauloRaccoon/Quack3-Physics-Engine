@@ -32,10 +32,10 @@ projeto/
 | 8 | raycast, overlap, debug draw, fuzzing, endurecimento da API, `install()` | feita |
 | 9 | eventos de contato, *sleeping* com ilhas, correção de posição (NGS), perfilamento por fase | feita |
 | V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita (compilou e rodou no Windows do usuário) |
-| V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
-| V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
-| V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
-| V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita |
+| V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita |
+| V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita |
+| V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
