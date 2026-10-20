@@ -37,6 +37,22 @@ void OrbitCamera::setDistance(float d) {
     if (finite(d)) distance_ = std::min(std::max(d, kMinDistance), kMaxDistance);
 }
 
+void OrbitCamera::reset(const Vec3f& newTarget, float newDistance) {
+    yaw_ = kDefaultYaw;
+    pitch_ = kDefaultPitch;
+    setTarget(newTarget);
+    setDistance(newDistance);
+}
+
+void OrbitCamera::followTarget(const Vec3f& goal, float dt, float rate) {
+    if (!finite(dt) || !finite(rate) || !(dt > 0.0f) || !(rate > 0.0f)) return;
+    if (!finite(goal.x) || !finite(goal.y) || !finite(goal.z)) return;
+    const float f = 1.0f - std::exp(-rate * dt);
+    target.x += (goal.x - target.x) * f;
+    target.y += (goal.y - target.y) * f;
+    target.z += (goal.z - target.z) * f;
+}
+
 Vec3f OrbitCamera::position() const {
     const float cp = std::cos(pitch_);
     return Vec3f{target.x + distance_ * cp * std::sin(yaw_),

@@ -29,6 +29,9 @@ add_subdirectory(${PHYSICS_ENGINE_DIR} physics_engine_build)
 add_library(viewer_core STATIC
   src/core/ViewerMath.cpp
   src/core/OrbitCamera.cpp
+  src/core/RenderPose.cpp
+  src/core/Interaction.cpp
+  src/core/TimeControl.cpp
   src/core/Scene.cpp)
 target_include_directories(viewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(viewer_core PUBLIC physics::physics)
@@ -61,8 +64,18 @@ if(VIEWER_BUILD_APP)
     FetchContent_MakeAvailable(raylib)
   endif()
 
+  # raygui: um único cabeçalho (src/raygui.h), baixado do GitHub (a raylib não o inclui).
+  include(FetchContent)
+  FetchContent_Declare(raygui
+    GIT_REPOSITORY https://github.com/raysan5/raygui.git
+    GIT_TAG 4.0
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(raygui)
+
   add_executable(physics_viewer src/app/main.cpp)
   target_link_libraries(physics_viewer PRIVATE viewer_core raylib)
+  # SYSTEM: o código do raygui não precisa passar pelos nossos avisos de compilação.
+  target_include_directories(physics_viewer SYSTEM PRIVATE ${raygui_SOURCE_DIR}/src)
   if(MSVC)
     target_compile_options(physics_viewer PRIVATE /W4)
   else()

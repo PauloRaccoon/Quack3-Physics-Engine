@@ -367,6 +367,64 @@ Scene makeShapesScene() {
     return s;
 }
 
+Scene makeGimbalScene() {
+    // Gravidade zero e passo largo (0,5 s): a caixa gira em torno do eixo X (o eixo do "pitch" da
+    // convenção YXZ) e atravessa pitch = 90°, onde yaw e roll viram o mesmo eixo (gimbal lock).
+    // Com o modo "Euler" a pose pula perto dali; com slerp, nada acontece.
+    Scene s;
+    s.name = "Gimbal lock (passo 0,5 s)";
+    PhysicsWorldSettings cfg;
+    cfg.gravity = Vector3(0, 0, 0);
+    cfg.fixedTimeStep = Real(0.5);
+    s.world = std::make_unique<PhysicsWorld>(cfg);
+
+    RigidBodyDesc d;
+    d.shape = std::make_shared<BoxShape>(Vector3(Real(1.4), Real(0.5), Real(0.25)));
+    d.mass = Real(1);
+    d.transform = Transform(Vector3(0, Real(2.5), 0));
+    d.angularVelocity = Vector3(Real(1.8), 0, 0);   // rad/s, eixo X do mundo (~49° por passo)
+    d.angularDamping = Real(0);
+    SceneBody b;
+    b.id = s.world->createBody(d);
+    b.kind = ShapeKind::Box;
+    b.halfExtents = Vec3f{1.4f, 0.5f, 0.25f};
+    b.r = 230; b.g = 120; b.b = 90;
+    s.focus = b.id;
+    s.bodies.push_back(b);
+    s.cameraTarget = Vec3f{0.0f, 2.5f, 0.0f};
+    s.cameraDistance = 9.0f;
+    return s;
+}
+
+Scene makeWideStepScene() {
+    // Gravidade zero, passo de 0,35 s e |ω| ≈ 8,2 rad/s: ~110° de giro entre dois passos. A
+    // diferença entre slerp, lerp sem normalizar e Euler fica enorme (e visível). Um CUBO (inércia
+    // isotrópica) evita efeitos giroscópicos do passo grande: só a interpolação de render difere.
+    Scene s;
+    s.name = "Interpolacao (passo 0,35 s)";
+    PhysicsWorldSettings cfg;
+    cfg.gravity = Vector3(0, 0, 0);
+    cfg.fixedTimeStep = Real(0.35);
+    s.world = std::make_unique<PhysicsWorld>(cfg);
+
+    RigidBodyDesc d;
+    d.shape = std::make_shared<BoxShape>(Vector3(Real(0.9), Real(0.9), Real(0.9)));
+    d.mass = Real(1);
+    d.transform = Transform(Vector3(0, Real(2.5), 0));
+    d.angularVelocity = Vector3(Real(4.6), Real(5.9), Real(3.3));
+    d.angularDamping = Real(0);
+    SceneBody b;
+    b.id = s.world->createBody(d);
+    b.kind = ShapeKind::Box;
+    b.halfExtents = Vec3f{0.9f, 0.9f, 0.9f};
+    b.r = 90; b.g = 170; b.b = 240;
+    s.focus = b.id;
+    s.bodies.push_back(b);
+    s.cameraTarget = Vec3f{0.0f, 2.5f, 0.0f};
+    s.cameraDistance = 9.0f;
+    return s;
+}
+
 // =============================================================================
 // Registro
 // =============================================================================
@@ -379,6 +437,8 @@ const std::vector<SceneInfo>& sceneList() {
         {"Pendulo duplo", &makePendulumScene},
         {"Corrente (juntas)", &makeChainScene},
         {"Formas (poliedros)", &makeShapesScene},
+        {"Gimbal lock (passo 0,5 s)", &makeGimbalScene},
+        {"Interpolacao (passo 0,35 s)", &makeWideStepScene},
     };
     return list;
 }

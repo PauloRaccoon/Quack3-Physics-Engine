@@ -72,6 +72,8 @@ Scene makePyramidScene();      ///< pirâmide de caixas (5 fileiras)
 Scene makeRainScene();         ///< caixas e esferas caindo em orientações aleatórias
 Scene makePendulumScene();     ///< pêndulo duplo (juntas de distância)
 Scene makeChainScene();        ///< corrente de caixas (juntas bola-soquete)
+Scene makeGimbalScene();       ///< gravidade zero, passo largo; gira através de pitch = 90° (gimbal lock)
+Scene makeWideStepScene();     ///< gravidade zero, passo de 0,35 s: interpolação de render bem visível
 Scene makeShapesScene();       ///< caixa, esfera e poliedros (tetraedro, octaedro, prisma, pirâmide)
 
 } // namespace viewer

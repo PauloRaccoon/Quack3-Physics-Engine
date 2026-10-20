@@ -33,6 +33,9 @@ projeto/
 | 9 | eventos de contato, *sleeping* com ilhas, correção de posição (NGS), perfilamento por fase | feita |
 | V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita (compilou e rodou no Windows do usuário) |
 | V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
@@ -375,16 +378,31 @@ o quatérnio continua sendo o estado da física.
 
 Roteiro, em etapas pequenas (cada uma deixa o viewer funcionando):
 
-| Etapa | Entrega | Estado |
+| Etapa | Entrega | Tamanho |
 |---|---|---|
-| V1 | esqueleto: `CMakeLists.txt`, janela, câmera orbital, chão, caixa em queda, quatérnio→matriz | feita; janela **não testada** (faltavam X11/OpenGL no ambiente de desenvolvimento) |
-| V2 | registro de 7 cenas (caixa, pilha, pirâmide, chuva, pêndulo duplo, corrente, poliedros), esferas e poliedros desenhados, ←/→ e 1–7 trocam de cena, `R` reinicia | feita; núcleo testado (123 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos |
-| V3 | painel do quatérnio (`x y z w`, norma, eixo-ângulo); chave slerp / lerp sem normalizar / Euler; cena de gimbal lock; FPS de render ajustável | |
-| V4 | clicar para selecionar (raycast do motor), arrastar com mola, lançar e apagar corpos | |
-| V5 | debug draw do motor, pausar e passo a passo, sliders (gravidade, iterações, NGS, sleeping), estatísticas e tempos | |
-| V6 | cor por estado (dormindo/acordado), flash em contato proporcional à velocidade de impacto | |
-| V7 | janela redimensionável, testes de fumaça no `ctest`, empacotamento | |
-| V8 | exportar trajetória e quatérnios em CSV para o relatório; modo apresentação | |
+| **V1. Esqueleto** (feita) | `CMakeLists.txt`, janela, câmera orbital, chão, caixa em queda, quatérnio→matriz. Compilou e rodou no Windows. | média |
+| **V2. Cenas** (feita) | Registro de 7 cenas (caixa, pilha, pirâmide, chuva, pêndulo duplo, corrente, poliedros), esferas e poliedros desenhados, ←/→ e 1–7 trocam de cena, `R` reinicia. Núcleo testado (123 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
+| **V3. Quatérnios na tela** (feita) | Painel `x y z w`, norma, eixo-ângulo e Euler do corpo em foco da cena (a seleção por clique chega na V4). Chave para escolher a interpolação de render: **slerp**, **lerp sem normalizar** ou **Euler**. Cena de gimbal lock. FPS de render ajustável por slider. Duas cenas novas de passo largo (gimbal lock e interpolação) para o efeito ser visível; raygui entra no CMake. Núcleo testado (175 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
+| **V4. Interação** (feita) | Clique seleciona (raycast do motor), arrastar com mola, lançar caixa ou esfera, apagar corpo. **Câmera:** girar ao redor do alvo com a **roda do mouse pressionada** (botão do meio) + mover o mouse (o botão direito continua girando); o alvo é o **centro do mundo** ou o **objeto selecionado** (alternável por tecla `T`; sem seleção, volta ao centro da cena); `Home` já reseta a câmera. Núcleo testado (229 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
+| **V5. Barra de controle** (feita) | Botão **Pausa/Play** (substitui a tecla `P`, com o estado visível), **passo a passo** (1 passo fixo), reiniciar, câmera lenta (escala de tempo) e seletor de cena. Botão **Resetar câmera** (volta ao enquadramento inicial da cena, com o alvo no centro do mundo) e botão do alvo da câmera (mundo / objeto selecionado). Núcleo `TimeControl` testado (318 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | pequena |
+| **V6. Painel do objeto** | Parâmetros ajustáveis do objeto selecionado: massa, atrito, restituição, amortecimento linear e angular, escala de gravidade, posição, orientação (quatérnio e eixo-ângulo), velocidades linear e angular, acordar/dormir. | média |
+| **V7. Painel do mundo e debug** | Debug draw do motor ligado ao `DrawLine3D`, com caixas de seleção por flag. Parâmetros ajustáveis do mundo: gravidade, Δt fixo, iterações de velocidade, `positionIterations`, sleeping e slop. Painel de estatísticas e tempos. | média |
+| **V8. Adicionar objetos** | Painel para adicionar objetos na cena atual: tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho, massa, posição, orientação inicial (eixo-ângulo ou quatérnio) e velocidade. Entra no ponto clicado ou é lançado da câmera. | média |
+| **V9. Eventos e sleeping** | Cor por estado (dormindo/acordado), flash no início de contato proporcional à velocidade de impacto, contador de contatos. | pequena |
+| **V10. Fechamento** | Janela redimensionável, README do viewer, testes de fumaça sem janela no `ctest`, empacotamento. | pequena |
+| **V11. Opcional, para o relatório** | Exportar a trajetória e os quatérnios em CSV para gráficos, e um modo apresentação. | pequena |
+
+Observações do planejamento:
+
+- `P` já pausa desde a V1; o botão chega na V5.
+- A câmera já gira com o botão direito desde a V1; a V4 acrescenta a roda pressionada e o alvo (mundo ou objeto selecionado), que depende da seleção; o botão de resetar fica na V5, com os demais botões (a tecla `Home` pode antecipá-lo na V4).
+- O motor já tem o necessário para os painéis (`setFriction`, `setRestitution`, `setLinearDamping`,
+  `setMassData`, `setGravityScale`, `setPose`, `setLinearVelocity`, `setGravity`, `createBody`,
+  `destroyBody`); ajustes que faltarem (por exemplo, mudar iterações do solver em execução) entram
+  na etapa que os usa, sem mudar o comportamento atual.
+- Corpos adicionados ou apagados ficam registrados em `Scene::bodies`; reiniciar volta ao estado
+  original da cena.
+- Os painéis (objeto, mundo, adicionar) ficam recolhíveis à direita, para não cobrir a cena.
 
 Para compilar e rodar, veja `physics_viewer/README.md`.
 
