@@ -31,11 +31,12 @@ projeto/
 | 7 | `pipeline/` (PhysicsWorld), `bridge/` (MotionState), `examples/main.cpp` | feita |
 | 8 | raycast, overlap, debug draw, fuzzing, endurecimento da API, `install()` | feita |
 | 9 | eventos de contato, *sleeping* com ilhas, correção de posição (NGS), perfilamento por fase | feita |
-| V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita |
-| V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita |
-| V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita |
-| V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita |
-| V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita |
+| V1 | `physics_viewer/`: janela, câmera orbital, quatérnio→matriz, caixa em queda (ver seção 9) | feita (compilou e rodou no Windows do usuário) |
+| V2 | 7 cenas selecionáveis, esferas e poliedros, juntas desenhadas, reinício (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V3 | painel do quatérnio, modos slerp / lerp sem normalizar / Euler, gimbal lock, slider de FPS, raygui (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V6 | painel do objeto selecionado: massa, atrito, restituição, amortecimentos, gravidade, posição, velocidades, orientação por eixo-ângulo, acordar/dormir (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
@@ -385,7 +386,7 @@ Roteiro, em etapas pequenas (cada uma deixa o viewer funcionando):
 | **V3. Quatérnios na tela** (feita) | Painel `x y z w`, norma, eixo-ângulo e Euler do corpo em foco da cena (a seleção por clique chega na V4). Chave para escolher a interpolação de render: **slerp**, **lerp sem normalizar** ou **Euler**. Cena de gimbal lock. FPS de render ajustável por slider. Duas cenas novas de passo largo (gimbal lock e interpolação) para o efeito ser visível; raygui entra no CMake. Núcleo testado (175 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
 | **V4. Interação** (feita) | Clique seleciona (raycast do motor), arrastar com mola, lançar caixa ou esfera, apagar corpo. **Câmera:** girar ao redor do alvo com a **roda do mouse pressionada** (botão do meio) + mover o mouse (o botão direito continua girando); o alvo é o **centro do mundo** ou o **objeto selecionado** (alternável por tecla `T`; sem seleção, volta ao centro da cena); `Home` já reseta a câmera. Núcleo testado (229 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
 | **V5. Barra de controle** (feita) | Botão **Pausa/Play** (substitui a tecla `P`, com o estado visível), **passo a passo** (1 passo fixo), reiniciar, câmera lenta (escala de tempo) e seletor de cena. Botão **Resetar câmera** (volta ao enquadramento inicial da cena, com o alvo no centro do mundo) e botão do alvo da câmera (mundo / objeto selecionado). Núcleo `TimeControl` testado (318 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | pequena |
-| **V6. Painel do objeto** | Parâmetros ajustáveis do objeto selecionado: massa, atrito, restituição, amortecimento linear e angular, escala de gravidade, posição, orientação (quatérnio e eixo-ângulo), velocidades linear e angular, acordar/dormir. | média |
+| **V6. Painel do objeto** (feita) | Parâmetros ajustáveis do objeto selecionado: massa, atrito, restituição, amortecimento linear e angular, escala de gravidade, posição, orientação (quatérnio e eixo-ângulo), velocidades linear e angular, acordar/dormir. Núcleo `BodyEditor` testado (370 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
 | **V7. Painel do mundo e debug** | Debug draw do motor ligado ao `DrawLine3D`, com caixas de seleção por flag. Parâmetros ajustáveis do mundo: gravidade, Δt fixo, iterações de velocidade, `positionIterations`, sleeping e slop. Painel de estatísticas e tempos. | média |
 | **V8. Adicionar objetos** | Painel para adicionar objetos na cena atual: tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho, massa, posição, orientação inicial (eixo-ângulo ou quatérnio) e velocidade. Entra no ponto clicado ou é lançado da câmera. | média |
 | **V9. Eventos e sleeping** | Cor por estado (dormindo/acordado), flash no início de contato proporcional à velocidade de impacto, contador de contatos. | pequena |

@@ -26,6 +26,10 @@
 // tempo (1x, 1/2, 1/4, 1/10 = câmera lenta), cena anterior/próxima, Resetar câmera e Alvo da
 // câmera (mundo / corpo selecionado). O tempo é controlado por viewer::TimeControl.
 //
+// V6 — painel do objeto selecionado (à direita, abaixo da interpolação): abas Material (massa, atrito,
+// restituição, amortecimentos, escala de gravidade, pode dormir), Posicao, Veloc. (linear e angular) e
+// Orient. (eixo-ângulo → quatérnio, botão Aplicar). A edição passa por viewer/core/BodyEditor.h.
+//
 // Controles: Espaço ou P = pausar/continuar; . (ponto) = um passo (pausa se estiver rodando);
 //            esquerdo = selecionar/arrastar (roda = profundidade durante o arrasto); direito ou
 //            roda pressionada + mover = girar a câmera; roda = zoom; T = alvo da câmera;
@@ -49,6 +53,7 @@
 #define RAYGUI_IMPLEMENTATION
 #include "raygui.h"
 
+#include "viewer/core/BodyEditor.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/RenderPose.h"
@@ -167,7 +172,7 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(kScreenW, kScreenH, "physics_viewer — V5");
+    InitWindow(kScreenW, kScreenH, "physics_viewer — V6");
     int fpsApplied = 120;
     float fpsSlider = 120.0f;
     SetTargetFPS(fpsApplied);   // o render NÃO precisa casar com a taxa da física: há interpolação
@@ -189,6 +194,10 @@ int main(int argc, char** argv) {
     physics::BodyId selected = physics::kInvalidBodyId;   // corpo selecionado (clique)
     viewer::SpringDrag drag;
     bool pivotSelected = false;                             // alvo da câmera: false = centro do mundo
+    // Painel do objeto (V6): aba atual e o rascunho da orientação (eixo + ângulo), que só vai ao corpo em "Aplicar".
+    int objTab = 0;
+    physics::BodyId lastSelected = physics::kInvalidBodyId;
+    float oAxisX = 0.0f, oAxisY = 1.0f, oAxisZ = 0.0f, oAngleDeg = 0.0f;
 
     // Pose de RENDER de um corpo: interpola os dois últimos passos físicos com o α atual, no modo escolhido.
     auto renderPose = [&](physics::BodyId id) {
@@ -204,8 +213,10 @@ int main(int argc, char** argv) {
         const Rectangle quatPanel{16.0f, 84.0f, 400.0f, 196.0f};
         const Rectangle interpPanel{screenW - 336.0f, narrow ? 52.0f : 12.0f, 320.0f, 214.0f};
         const Vector2 mouse = GetMousePosition();
+        const Rectangle objPanel{screenW - 336.0f, interpPanel.y + interpPanel.height + 8.0f, 320.0f, 270.0f};
+        const bool objPanelShown = selected != physics::kInvalidBodyId;
         const bool overGui = CheckCollisionPointRec(mouse, quatPanel) || CheckCollisionPointRec(mouse, interpPanel) ||
-                             CheckCollisionPointRec(mouse, controlBar);
+                             CheckCollisionPointRec(mouse, controlBar) || (objPanelShown && CheckCollisionPointRec(mouse, objPanel));
 
         // --- Entrada: câmera ------------------------------------------------------------------------------
         // Gira ao redor do alvo com o botão direito OU com a roda do mouse pressionada.
@@ -290,7 +301,8 @@ int main(int argc, char** argv) {
 
         // --- Física: N passos fixos conforme o tempo de render ------------------------------------------------
         // A mola só atua com a física rodando (a força é consumida no passo, e pausado não há passo).
-        if (!timeCtl.paused() && drag.active()) drag.apply(scene, rayO, rayD, static_cast<physics::Real>(GetFrameTime()));
+        if (!timeCtl.paused() && drag.active()) drag.apply(scene, rayO, rayD,
+                                                      static_cast<physics::Real>(GetFrameTime()) * static_cast<physics::Real>(timeCtl.timeScale()));   // tempo FÍSICO do quadro (câmera lenta incluída)
         timeCtl.advance(*scene.world, static_cast<physics::Real>(GetFrameTime()));
 
         // --- Desenho ----------------------------------------------------------------------------------------------
@@ -418,6 +430,95 @@ int main(int argc, char** argv) {
                 SetTargetFPS(fpsApplied);
             }
         }
+        // --- Painel do objeto selecionado (V6) --------------------------------------------------------------
+        if (objPanelShown && scene.world->isValidBody(selected)) {
+            physics::PhysicsWorld& world = *scene.world;
+            if (selected != lastSelected) {   // rascunho da orientação parte da orientação atual do corpo
+                lastSelected = selected;
+                const viewer::AxisAngleF aa0 = viewer::toAxisAngle(world.getBody(selected).getOrientation());
+                oAxisX = aa0.axis.x; oAxisY = aa0.axis.y; oAxisZ = aa0.axis.z;
+                oAngleDeg = aa0.angle * 57.29578f;
+            }
+            GuiPanel(objPanel, TextFormat("Objeto selecionado (corpo %u)", static_cast<unsigned>(selected)));
+            const float ox = objPanel.x + 12.0f, ow = objPanel.width - 24.0f;
+            float oy = objPanel.y + 32.0f;
+            GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
+            oy += 36.0f;
+            const float labelW = 96.0f, valueW = 58.0f;
+            const float barW = ow - labelW - valueW - 8.0f;
+            // Uma linha: nome, slider e valor. Devolve true se o USUÁRIO mexeu no slider (mouse sobre a barra com o
+            // botão apertado); o valor lido do corpo fora da faixa não conta como edição (o raygui o limita).
+            auto sliderRow = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
+                const Rectangle bar{ox + labelW, oy, barW, 20.0f};
+                const float before = v;
+                DrawText(name, static_cast<int>(ox), static_cast<int>(oy) + 2, 16, LIGHTGRAY);
+                GuiSlider(bar, nullptr, nullptr, &v, lo, hi);
+                DrawText(valueText, static_cast<int>(ox + labelW + barW) + 6, static_cast<int>(oy) + 2, 16, RAYWHITE);
+                oy += 26.0f;
+                return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse, bar);
+            };
+            using physics::Real;
+            viewer::BodyParams bp;
+            viewer::readParams(world, selected, bp);
+            const physics::RigidBody& body = world.getBody(selected);
+            if (objTab == 0) {   // Material
+                float m = std::sqrt(static_cast<float>(bp.mass));   // escala √: mais precisão nas massas pequenas
+                if (sliderRow("massa", m, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(m * m))))
+                    viewer::setMass(world, selected, static_cast<Real>(m * m));
+                float f = static_cast<float>(bp.friction);
+                if (sliderRow("atrito", f, 0.0f, 2.0f, TextFormat("%.2f", static_cast<double>(f)))) viewer::setFriction(world, selected, static_cast<Real>(f));
+                float r = static_cast<float>(bp.restitution);
+                if (sliderRow("restituicao", r, 0.0f, 1.0f, TextFormat("%.2f", static_cast<double>(r)))) viewer::setRestitution(world, selected, static_cast<Real>(r));
+                float ld = static_cast<float>(bp.linearDamping);
+                if (sliderRow("amort. linear", ld, 0.0f, 5.0f, TextFormat("%.2f", static_cast<double>(ld)))) viewer::setLinearDamping(world, selected, static_cast<Real>(ld));
+                float ad = static_cast<float>(bp.angularDamping);
+                if (sliderRow("amort. angular", ad, 0.0f, 5.0f, TextFormat("%.2f", static_cast<double>(ad)))) viewer::setAngularDamping(world, selected, static_cast<Real>(ad));
+                float gs = static_cast<float>(bp.gravityScale);
+                if (sliderRow("escala grav.", gs, -2.0f, 5.0f, TextFormat("%+.2f", static_cast<double>(gs)))) viewer::setGravityScale(world, selected, static_cast<Real>(gs));
+                bool allow = bp.allowSleep;
+                GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " pode dormir (sleeping)", &allow);
+                if (allow != bp.allowSleep) viewer::setAllowSleep(world, selected, allow);
+            } else if (objTab == 1) {   // Posicao + acordar/dormir
+                const physics::Vector3 pos = body.getTransform().position;
+                float px = static_cast<float>(pos.x), py = static_cast<float>(pos.y), pz = static_cast<float>(pos.z);
+                bool moved = false;
+                moved |= sliderRow("x", px, -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(px)));
+                moved |= sliderRow("y", py, -2.0f, 14.0f, TextFormat("%+.2f m", static_cast<double>(py)));
+                moved |= sliderRow("z", pz, -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(pz)));
+                if (moved) viewer::setPosition(world, selected, physics::Vector3(px, py, pz));
+                oy += 6.0f;
+                DrawText(bp.awake ? "estado: acordado" : "estado: dormindo", static_cast<int>(ox), static_cast<int>(oy), 16, bp.awake ? LIGHTGRAY : Color{110, 170, 255, 255});
+                oy += 24.0f;
+                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Acordar")) viewer::setAwake(world, selected, true);
+                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Dormir")) viewer::setAwake(world, selected, false);
+            } else if (objTab == 2) {   // Velocidades
+                const physics::Vector3 v = body.getLinearVelocity(), w = body.getAngularVelocity();
+                float vv[3] = {static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)};
+                float ww[3] = {static_cast<float>(w.x), static_cast<float>(w.y), static_cast<float>(w.z)};
+                bool chV = false, chW = false;
+                const char* vn[3] = {"v x", "v y", "v z"};
+                const char* wn[3] = {"w x", "w y", "w z"};
+                for (int i = 0; i < 3; ++i) chV |= sliderRow(vn[i], vv[i], -20.0f, 20.0f, TextFormat("%+.2f m/s", static_cast<double>(vv[i])));
+                for (int i = 0; i < 3; ++i) chW |= sliderRow(wn[i], ww[i], -20.0f, 20.0f, TextFormat("%+.2f r/s", static_cast<double>(ww[i])));
+                if (chV) viewer::setLinearVelocity(world, selected, physics::Vector3(vv[0], vv[1], vv[2]));
+                if (chW) viewer::setAngularVelocity(world, selected, physics::Vector3(ww[0], ww[1], ww[2]));
+                oy += 2.0f;
+                if (GuiButton(Rectangle{ox, oy, ow, 28.0f}, "Zerar velocidades")) viewer::zeroVelocities(world, selected);
+            } else {   // Orientação: eixo + ângulo -> quatérnio
+                sliderRow("eixo x", oAxisX, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisX)));
+                sliderRow("eixo y", oAxisY, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisY)));
+                sliderRow("eixo z", oAxisZ, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisZ)));
+                sliderRow("angulo", oAngleDeg, 0.0f, 360.0f, TextFormat("%.0f gr", static_cast<double>(oAngleDeg)));
+                oy += 2.0f;
+                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Aplicar q"))
+                    viewer::setOrientationAxisAngle(world, selected, physics::Vector3(oAxisX, oAxisY, oAxisZ),
+                                                    static_cast<Real>(oAngleDeg * 0.017453292519943295f));
+                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
+                oy += 34.0f;
+                DrawText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, GRAY);
+            }
+        }
+
         if (selected != physics::kInvalidBodyId) {
             const physics::RigidBody& sb = scene.world->getBody(selected);
             DrawText(TextFormat("selecionado: corpo %u   massa %.2f kg   |v| = %.2f m/s   %s", static_cast<unsigned>(selected),

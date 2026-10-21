@@ -17,6 +17,7 @@
 #include <limits>
 #include <string>
 
+#include "viewer/core/BodyEditor.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/RenderPose.h"
@@ -643,6 +644,120 @@ static void testTimeControl() {
     }
 }
 
+static void testBodyEditor() {
+    using namespace physics;
+    const Real dt = Real(1) / Real(60);
+    Scene s = makeFallingBoxScene();
+    PhysicsWorld& w = *s.world;
+    const BodyId id = s.focus;
+    const BodyId ground = s.bodies.front().id;
+
+    // --- leitura ----------------------------------------------------------------------------------------------
+    BodyParams p;
+    CHECK(readParams(w, id, p));
+    CHECK(std::fabs(p.mass - Real(1)) < Real(1e-5) && std::fabs(p.friction - Real(0.5)) < Real(1e-6) &&
+          std::fabs(p.restitution - Real(0.3)) < Real(1e-6) && p.allowSleep && p.awake && std::fabs(p.gravityScale - Real(1)) < Real(1e-6));
+    BodyParams untouched;
+    untouched.mass = Real(-7);
+    CHECK(!readParams(w, kInvalidBodyId, untouched) && untouched.mass == Real(-7));
+
+    // --- massa: a inércia acompanha; o impulso rende 1/m ---------------------------------------------------------
+    const Real i0 = w.getBody(id).getMassData().inertia(0, 0);
+    CHECK(setMass(w, id, Real(4)));
+    CHECK(std::fabs(w.getBody(id).getMass() - Real(4)) < Real(1e-4));
+    CHECK(std::fabs(w.getBody(id).getMassData().invMass - Real(0.25)) < Real(1e-4));
+    CHECK(std::fabs(w.getBody(id).getMassData().inertia(0, 0) / i0 - Real(4)) < Real(1e-3));   // cubo homogêneo: I ∝ m
+    w.getBody(id).setLinearVelocity(Vector3(0, 0, 0));
+    w.getBody(id).applyLinearImpulse(Vector3(4, 0, 0));
+    CHECK(std::fabs(w.getBody(id).getLinearVelocity().x - Real(1)) < Real(1e-4));
+    CHECK(setMass(w, id, Real(1e6)) && std::fabs(w.getBody(id).getMass() - limits::kMaxMass) < Real(1e-3));
+    CHECK(setMass(w, id, Real(-3)) && std::fabs(w.getBody(id).getMass() - limits::kMinMass) < Real(1e-5));
+    CHECK(!setMass(w, id, std::numeric_limits<Real>::quiet_NaN()));
+    CHECK(std::fabs(w.getBody(id).getMass() - limits::kMinMass) < Real(1e-5));   // NaN não mudou nada
+    setMass(w, id, Real(1));
+
+    // --- atrito, restituição, amortecimentos, gravidade (com limites) ----------------------------------------------
+    CHECK(setFriction(w, id, Real(5)) && std::fabs(w.getBody(id).getFriction() - Real(2)) < Real(1e-6));
+    CHECK(setFriction(w, id, Real(-1)) && w.getBody(id).getFriction() == Real(0));
+    CHECK(setRestitution(w, id, Real(2)) && std::fabs(w.getBody(id).getRestitution() - Real(1)) < Real(1e-6));
+    CHECK(setLinearDamping(w, id, Real(99)) && std::fabs(w.getBody(id).getLinearDamping() - limits::kMaxDamping) < Real(1e-6));
+    CHECK(setAngularDamping(w, id, Real(-1)) && w.getBody(id).getAngularDamping() == Real(0));
+    CHECK(setGravityScale(w, id, Real(99)) && std::fabs(w.getBody(id).getGravityScale() - limits::kMaxGravityScale) < Real(1e-6));
+    CHECK(setGravityScale(w, id, Real(-99)) && std::fabs(w.getBody(id).getGravityScale() + limits::kMaxGravityScale) < Real(1e-6));
+    CHECK(!setFriction(w, id, std::numeric_limits<Real>::infinity()));
+    CHECK(setAllowSleep(w, id, false) && !w.getBody(id).getAllowSleep());
+    setAllowSleep(w, id, true);
+    setFriction(w, id, Real(0.5));
+    setRestitution(w, id, Real(0.3));
+    setLinearDamping(w, id, Real(0));
+
+    // escala de gravidade 0: a caixa não cai; negativa: sobe.
+    setGravityScale(w, id, Real(0));
+    w.getBody(id).setLinearVelocity(Vector3(0, 0, 0));
+    const Real y0 = w.getBody(id).getWorldCenterOfMass().y;
+    for (int i = 0; i < 60; ++i) w.update(dt);
+    CHECK(std::fabs(w.getBody(id).getWorldCenterOfMass().y - y0) < Real(0.01));
+    setGravityScale(w, id, Real(-1));
+    for (int i = 0; i < 60; ++i) w.update(dt);
+    CHECK(w.getBody(id).getWorldCenterOfMass().y > y0 + Real(1));
+    setGravityScale(w, id, Real(1));
+
+    // --- posição: teletransporte sem rastro; orientação e velocidades ficam -----------------------------------------
+    const Quaternion qBefore = w.getBody(id).getOrientation();
+    const Vector3 vBefore = w.getBody(id).getLinearVelocity();
+    CHECK(setPosition(w, id, Vector3(2, 7, -1)));
+    CHECK(w.getBody(id).getTransform().position.nearlyEqual(Vector3(2, 7, -1), Real(1e-5)));
+    CHECK(w.getInterpolatedTransform(id).position.nearlyEqual(Vector3(2, 7, -1), Real(1e-4)));   // render imediato
+    CHECK(w.getBody(id).getOrientation().nearlyEqual(qBefore, Real(1e-6)));
+    CHECK(w.getBody(id).getLinearVelocity().nearlyEqual(vBefore, Real(1e-6)));
+    CHECK(!setPosition(w, id, Vector3(std::numeric_limits<Real>::quiet_NaN(), 0, 0)));
+
+    // --- orientação por eixo-ângulo e reset ---------------------------------------------------------------------------
+    CHECK(setOrientationAxisAngle(w, id, Vector3(0, 2, 0), Real(1)));    // eixo não unitário é normalizado
+    const Quaternion q = w.getBody(id).getOrientation();
+    CHECK(std::fabs(q.w - std::cos(Real(0.5))) < Real(1e-5) && std::fabs(q.y - std::sin(Real(0.5))) < Real(1e-5) &&
+          std::fabs(q.x) < Real(1e-6) && std::fabs(q.norm() - Real(1)) < Real(1e-5));
+    CHECK(w.getBody(id).getTransform().position.nearlyEqual(Vector3(2, 7, -1), Real(1e-5)));   // posição intacta
+    const Quaternion keep = w.getBody(id).getOrientation();
+    CHECK(!setOrientationAxisAngle(w, id, Vector3(0, 0, 0), Real(1)));
+    CHECK(!setOrientationAxisAngle(w, id, Vector3(1, 0, 0), std::numeric_limits<Real>::quiet_NaN()));
+    CHECK(w.getBody(id).getOrientation().nearlyEqual(keep, Real(1e-7)));
+    CHECK(resetOrientation(w, id));
+    CHECK(w.getBody(id).getOrientation().nearlyEqual(Quaternion::identity(), Real(1e-6)));
+
+    // --- velocidades, acordar/dormir -------------------------------------------------------------------------------------
+    CHECK(setLinearVelocity(w, id, Vector3(1, 2, 3)) && setAngularVelocity(w, id, Vector3(-1, 0, 4)));
+    CHECK(w.getBody(id).getLinearVelocity().nearlyEqual(Vector3(1, 2, 3), Real(1e-6)));
+    CHECK(w.getBody(id).getAngularVelocity().nearlyEqual(Vector3(-1, 0, 4), Real(1e-6)));
+    CHECK(!setLinearVelocity(w, id, Vector3(0, std::numeric_limits<Real>::infinity(), 0)));
+    CHECK(zeroVelocities(w, id));
+    CHECK(w.getBody(id).getLinearVelocity().isZero() && w.getBody(id).getAngularVelocity().isZero());
+    CHECK(setAwake(w, id, false) && !w.getBody(id).isAwake());
+    CHECK(setAwake(w, id, true) && w.getBody(id).isAwake());
+
+    // --- estáticos e ids inválidos: nada muda ----------------------------------------------------------------------------------
+    CHECK(!setMass(w, ground, Real(2)) && !setFriction(w, ground, Real(1)) && !setPosition(w, ground, Vector3(0, 9, 0)) &&
+          !setOrientationAxisAngle(w, ground, Vector3(0, 1, 0), Real(1)) && !setAwake(w, ground, false) && !zeroVelocities(w, ground));
+    CHECK(w.getBody(ground).getTransform().position.nearlyEqual(Vector3(0, Real(-0.5), 0), Real(1e-6)));
+    CHECK(!setMass(w, kInvalidBodyId, Real(2)) && !setPosition(w, kInvalidBodyId, Vector3(0, 0, 0)) && !setAwake(w, 9999, true));
+
+    // --- editar no meio da simulação não desestabiliza: pilha com o topo 50 vezes mais pesado --------------------------------
+    {
+        Scene st = makeStackScene();
+        for (int i = 0; i < 30; ++i) st.world->update(dt);
+        CHECK(setMass(*st.world, st.focus, Real(50)));
+        CHECK(setFriction(*st.world, st.focus, Real(1.5)));
+        bool finite = true;
+        for (int i = 0; i < 240; ++i) {
+            st.world->update(dt);
+            finite = finite && st.world->getBody(st.focus).getWorldCenterOfMass().isFinite() &&
+                     std::fabs(st.world->getBody(st.focus).getOrientation().norm() - Real(1)) < Real(1e-3);
+        }
+        CHECK(finite);
+        CHECK(st.world->getBody(st.focus).getWorldCenterOfMass().y > Real(1.0));   // não afundou nas caixas de baixo
+    }
+}
+
 static void testCameraDistance() {
     OrbitCamera c;
     c.setDistance(30.0f);
@@ -665,6 +780,7 @@ int main() {
     testCameraDistance();
     testRenderPose();
     testInteraction();
+    testBodyEditor();
     testTimeControl();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
