@@ -3,7 +3,7 @@
 Janela de demonstração do `../physics_engine` (C++17 + [raylib](https://www.raylib.com/)). Fica numa pasta
 **ao lado** do motor, que continua sem nenhuma dependência gráfica.
 
-> Estado: **V6** (painel do objeto selecionado, além da barra de controle, da interação com o mouse e do quatérnio na tela). O roteiro completo
+> Estado: **V7.1** (V7 com correções de legibilidade: painel do mundo e debug draw, além do painel do objeto, da barra de controle, da interação com o mouse e do quatérnio na tela). O roteiro completo
 > está no `README.md` da pasta acima.
 
 ## Compilar e rodar
@@ -55,6 +55,7 @@ Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `
 | `.` ou botão **Passo** | avança **um** passo físico fixo (se estava rodando, pausa primeiro) |
 | botões `1x` `1/2` `1/4` `1/10` | escala de tempo (câmera lenta) |
 | botões `<` `>` e **Reiniciar** | cena anterior / próxima; recriar a cena atual (como `R`) |
+| `M` | mostrar / esconder o painel do mundo (à esquerda, embaixo) |
 | `ESC` | sair |
 
 Verificação automática, sem interação (roda 240 quadros, salva uma captura e sai com código 0):
@@ -80,6 +81,30 @@ Verificação automática, sem interação (roda 240 quadros, salva uma captura 
 Os poliedros são desenhados a partir da `HalfEdgeStructure` do motor (faces em leque de triângulos, com
 tom pela normal no mundo, mais as arestas). As cenas ficam em `src/core/Scene.cpp`; para criar outra,
 escreva uma função `makeXScene()` e acrescente-a em `sceneList()`.
+
+## Painel do mundo e debug (V7)
+
+Painel à esquerda, embaixo (tecla `M` mostra/esconde), com quatro abas. A edição passa por `WorldEditor.h`
+(sem raylib, testado); valores não finitos são ignorados e o que excede a faixa é limitado.
+
+| Aba | Conteúdo |
+|---|---|
+| Mundo | gravidade x, y, z (±30 m/s²), frequência da física (10 a 240 Hz, ou seja, Δt fixo = 1/Hz), sleeping ligado e tempo para dormir; **Restaurar padroes da cena** |
+| Solver | iterações de velocidade (1 a 50), iterações de posição / NGS (0 = Baumgarte legado, até 20), slop linear (0 a 50 mm), slop de velocidade (0 a 2 m/s), warm starting; **Restaurar** |
+| Debug | as 9 opções do debug draw do motor (formas, AABB, Fat AABB, pontos e normais de contato, juntas, centro de massa, velocidades, eixos locais) desenhadas com `DrawLine3D` a partir do `DebugLineBuffer`; **esconder modelos** (só o debug); atalhos Padrao / Desligar |
+| Stats | corpos (acordados / dormindo), ilhas, juntas, pares (tocando / congelados), pontos de contato e contatos no solver, nº do passo; com **medir tempos** ligado, o custo (µs) de cada fase do último passo |
+
+Observações:
+
+- **Experimente:** na cena 2 (pilha), baixe as iterações de velocidade para 2 e veja a pilha amolecer; ponha
+  `iter. posicao` em 0 e compare; desligue o sleeping e veja a pilha ficar sempre "acordada" na aba Stats.
+- Mudar o Δt em execução preserva o α do acumulador; os impulsos de warm start vêm do Δt antigo e não são
+  reescalados (pequeno transiente). Regravar a gravidade ou desligar o sleeping acorda todos os corpos.
+- O debug draw usa a pose interpolada pelo **slerp** do motor, mesmo se o modo de render for lerp ou Euler
+  (as linhas podem divergir um pouco do modelo nesses modos). Logo após um passo manual usa a pose atual.
+- O botão **Restaurar** volta aos valores com que a cena foi criada (as cenas 8 e 9 já têm gravidade zero e passo largo).
+- As cenas 8 e 9 têm Δt de 0,5 s e 0,35 s, abaixo da faixa do slider de frequência (10 Hz); o slider mostra o
+  extremo, mas o valor só muda se você o arrastar.
 
 ## Painel do objeto selecionado (V6)
 
@@ -162,7 +187,7 @@ desenha os eixos locais do corpo (X vermelho, Y verde, Z azul).
 ```text
 physics_viewer/
 ├── CMakeLists.txt
-├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, RenderPose, Interaction, TimeControl, BodyEditor   — SEM raylib
+├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
 ├── src/core/
 ├── src/app/main.cpp       a janela (única parte que usa raylib)
 └── tests/viewer_tests.cpp testes do núcleo, sem janela
@@ -173,10 +198,13 @@ raylib é fina.
 
 ## O que foi verificado
 
-- Núcleo e testes (370 verificações: matemática, câmera, as 9 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
+- Núcleo e testes (420 verificações: matemática, câmera, as 9 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
 - `main.cpp`: passa na verificação de tipos contra os cabeçalhos da raylib 5.5 e do raygui 4.0, sem warnings, em `float` e
   `double`. A convenção de matriz foi conferida no código-fonte da raylib (campo `mN` = elemento `N` do
   array passado a `rlMultMatrixf`).
-- **Não verificado:** a janela em si (linkar, abrir e desenhar). O ambiente de desenvolvimento não tinha as
-  bibliotecas X11/OpenGL. Na V5, confira se os botões da barra cabem e respondem (o botão **Passo** deve avançar um passo por clique, com o contador `passo #N` do HUD subindo de 1 em 1) e se a câmera lenta mantém o movimento suave. Na V6, confira se os sliders do painel do objeto respondem ao arrastar e se o texto cabe nos 320 px (a aba "Material" é a mais cheia). Na V4, confira se o clique seleciona o corpo certo (o raio sai do pixel do mouse), se o arrastar acompanha o mouse sem "chicotear" e se o botão do meio gira a câmera (alguns mouses/touchpads não têm; o botão direito continua valendo). Na V3, confira também se os painéis aparecem legíveis (texto sem cortes), se o modo lerp encolhe o cubo na cena 9 e se o modo Euler "pula" na cena 8. Na V2, confira também se os poliedros aparecem sólidos (não furados nem invertidos) e se as linhas das juntas ligam os corpos certos. Quem compila na primeira vez deve conferir se a caixa cai girando, se os eixos
-  coloridos acompanham a caixa e se o `|q|` fica em 1.000000.
+- **A janela:** o usuário compilou e executou no Windows até a V7 (capturas de tela). Desde a V7.1, o texto dos
+  painéis é escuro (os painéis do raygui são claros) e o texto direto sobre a cena ganha uma faixa escura
+  translúcida. **Não verificado por mim:** o ajuste fino dos tamanhos depois da V7.1 (não consigo abrir a janela
+  no ambiente de desenvolvimento, sem X11/OpenGL); as larguras foram calculadas a partir das capturas.
+  Confira na V7.1: se todo texto dos painéis é legível, se cada slider mostra seu número à direita, se nenhum
+  rótulo é cortado pela barra do slider e se o texto de baixo (FPS e atalhos) aparece sobre a faixa escura.

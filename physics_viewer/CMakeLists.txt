@@ -33,6 +33,7 @@ add_library(viewer_core STATIC
   src/core/Interaction.cpp
   src/core/TimeControl.cpp
   src/core/BodyEditor.cpp
+  src/core/WorldEditor.cpp
   src/core/Scene.cpp)
 target_include_directories(viewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(viewer_core PUBLIC physics::physics)

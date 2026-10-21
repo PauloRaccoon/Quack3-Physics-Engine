@@ -30,6 +30,11 @@
 // restituição, amortecimentos, escala de gravidade, pode dormir), Posicao, Veloc. (linear e angular) e
 // Orient. (eixo-ângulo → quatérnio, botão Aplicar). A edição passa por viewer/core/BodyEditor.h.
 //
+// V7 — painel do mundo (esquerda, embaixo; tecla M mostra/esconde): abas Mundo (gravidade, Δt fixo,
+// sleeping), Solver (iterações de velocidade e de posição, slops, warm start), Debug (as 9 opções do
+// debug draw do motor desenhadas com DrawLine3D, mais "esconder modelos") e Stats (contagens e tempos
+// por fase). A edição passa por viewer/core/WorldEditor.h.
+//
 // Controles: Espaço ou P = pausar/continuar; . (ponto) = um passo (pausa se estiver rodando);
 //            esquerdo = selecionar/arrastar (roda = profundidade durante o arrasto); direito ou
 //            roda pressionada + mover = girar a câmera; roda = zoom; T = alvo da câmera;
@@ -41,6 +46,7 @@
 //     physics_viewer --frames 240 --screenshot saida.png
 // roda 240 quadros, salva uma captura da tela e sai com código 0.
 // =============================================================================
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -58,6 +64,7 @@
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
+#include "viewer/core/WorldEditor.h"
 #include "viewer/core/Scene.h"
 #include "viewer/core/ViewerMath.h"
 
@@ -67,6 +74,29 @@ constexpr int kScreenW = 1280;
 constexpr int kScreenH = 720;
 
 Vector3 toRay(const viewer::Vec3f& v) { return Vector3{v.x, v.y, v.z}; }
+
+// Cores de texto. Os painéis do raygui são CLAROS (cinza), então o texto dentro deles é ESCURO. O texto que fica
+// direto sobre a cena 3D (HUD) é claro e ganha uma faixa escura translúcida (hudText), senão some no chão cinza.
+constexpr Color kInk{30, 32, 40, 255};       // texto principal nos painéis
+constexpr Color kInkDim{70, 74, 86, 255};    // texto secundário nos painéis
+constexpr Color kAccent{150, 70, 0, 255};    // valores do quatérnio
+constexpr Color kWarn{190, 25, 25, 255};     // avisos (|q| != 1, gimbal lock)
+constexpr Color kBlueInk{20, 80, 170, 255};
+
+/// Texto sobre a cena: faixa escura translúcida atrás (mesma assinatura de DrawText).
+void hudText(const char* text, int x, int y, int size, Color color) {
+    const int w = MeasureText(text, size);
+    DrawRectangle(x - 6, y - 3, w + 12, size + 6, Color{10, 12, 18, 190});
+    DrawText(text, x, y, size, color);
+}
+
+/// Slider com a regra do painel: só conta como edição do usuário se o valor mudou COM o botão apertado
+/// e o mouse sobre a barra (o raygui limita valores fora da faixa, e isso não pode alterar o mundo).
+bool sliderEdited(const Rectangle& bar, float& v, float lo, float hi) {
+    const float before = v;
+    GuiSlider(bar, nullptr, nullptr, &v, lo, hi);
+    return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), bar);
+}
 
 /// Desenha um corpo na pose `m` (matriz de modelo vinda do quatérnio do motor).
 void drawBody(const viewer::SceneBody& body, const viewer::Mat4f& m) {
@@ -172,7 +202,7 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(kScreenW, kScreenH, "physics_viewer — V6");
+    InitWindow(kScreenW, kScreenH, "physics_viewer — V7");
     int fpsApplied = 120;
     float fpsSlider = 120.0f;
     SetTargetFPS(fpsApplied);   // o render NÃO precisa casar com a taxa da física: há interpolação
@@ -195,6 +225,14 @@ int main(int argc, char** argv) {
     viewer::SpringDrag drag;
     bool pivotSelected = false;                             // alvo da câmera: false = centro do mundo
     // Painel do objeto (V6): aba atual e o rascunho da orientação (eixo + ângulo), que só vai ao corpo em "Aplicar".
+    // Painel do mundo (V7).
+    bool showWorld = true;
+    int worldTab = 0;
+    bool profilingOn = false;
+    bool hideModels = false;
+    std::uint32_t dbgFlags = 0;                 // opções do debug draw ligadas (0 = desligado)
+    physics::DebugLineBuffer dbgBuf;
+    viewer::WorldParams sceneDefaults = viewer::captureWorld(*scene.world);   // "Restaurar padroes da cena"
     int objTab = 0;
     physics::BodyId lastSelected = physics::kInvalidBodyId;
     float oAxisX = 0.0f, oAxisY = 1.0f, oAxisZ = 0.0f, oAngleDeg = 0.0f;
@@ -208,15 +246,20 @@ int main(int argc, char** argv) {
     while (!WindowShouldClose()) {
         // Painéis (calculados a cada quadro: a janela é redimensionável).
         const float screenW = static_cast<float>(GetScreenWidth());
-        const bool narrow = screenW < 1220.0f;   // barra e painel da direita não cabem lado a lado
-        const Rectangle controlBar{16.0f, 8.0f, narrow ? screenW - 32.0f : screenW - 368.0f, 36.0f};
+        const bool narrow = screenW < 1320.0f;   // barra e painel da direita não cabem lado a lado
+        const Rectangle controlBar{16.0f, 8.0f, narrow ? screenW - 32.0f : screenW - 408.0f, 36.0f};
         const Rectangle quatPanel{16.0f, 84.0f, 400.0f, 196.0f};
-        const Rectangle interpPanel{screenW - 336.0f, narrow ? 52.0f : 12.0f, 320.0f, 214.0f};
+        const Rectangle interpPanel{screenW - 376.0f, narrow ? 52.0f : 12.0f, 360.0f, 214.0f};
         const Vector2 mouse = GetMousePosition();
-        const Rectangle objPanel{screenW - 336.0f, interpPanel.y + interpPanel.height + 8.0f, 320.0f, 270.0f};
+        const float worldY = quatPanel.y + quatPanel.height + 62.0f;
+        // Altura adaptativa: termina antes da faixa de texto de baixo (96 px), com no mínimo 180 px.
+        const float worldH = std::min(276.0f, std::max(180.0f, static_cast<float>(GetScreenHeight()) - 96.0f - worldY));
+        const Rectangle worldPanel{quatPanel.x, worldY, quatPanel.width, worldH};
+        const Rectangle objPanel{screenW - 376.0f, interpPanel.y + interpPanel.height + 8.0f, 360.0f, 270.0f};
         const bool objPanelShown = selected != physics::kInvalidBodyId;
         const bool overGui = CheckCollisionPointRec(mouse, quatPanel) || CheckCollisionPointRec(mouse, interpPanel) ||
-                             CheckCollisionPointRec(mouse, controlBar) || (objPanelShown && CheckCollisionPointRec(mouse, objPanel));
+                             CheckCollisionPointRec(mouse, controlBar) || (objPanelShown && CheckCollisionPointRec(mouse, objPanel)) ||
+                             (showWorld && CheckCollisionPointRec(mouse, worldPanel));
 
         // --- Entrada: câmera ------------------------------------------------------------------------------
         // Gira ao redor do alvo com o botão direito OU com a roda do mouse pressionada.
@@ -230,6 +273,7 @@ int main(int argc, char** argv) {
         if (IsKeyPressed(KEY_I))
             mode = static_cast<viewer::InterpMode>((static_cast<int>(mode) + 1) % viewer::kInterpModeCount);
         if (IsKeyPressed(KEY_T) || uiPivot) pivotSelected = !pivotSelected;
+        if (IsKeyPressed(KEY_M)) showWorld = !showWorld;
 
         // Troca de cena: ←/→ (com volta) ou 1–9; R recria a atual (reinicia).
         std::size_t wanted = sceneIndex;
@@ -241,6 +285,8 @@ int main(int argc, char** argv) {
         if (changed || IsKeyPressed(KEY_R) || uiRestart) {
             sceneIndex = wanted;
             scene = viewer::makeScene(sceneIndex);
+            sceneDefaults = viewer::captureWorld(*scene.world);
+            scene.world->setProfilingEnabled(profilingOn);
             selected = physics::kInvalidBodyId;   // os ids são de outro mundo
             drag.end();
             timeCtl.onSceneReset();
@@ -318,13 +364,19 @@ int main(int argc, char** argv) {
         for (const viewer::SceneBody& body : scene.bodies) {
             const physics::Transform pose = renderPose(body.id);
             const viewer::Mat4f m = viewer::toMat4(pose);
-            drawBody(body, m);
+            if (!hideModels) drawBody(body, m);
             if (body.id == selected) drawHighlight(body, m);
             if (body.id == infoBody) {
                 focusMatrix = m;
                 focusPose = pose;
                 hasFocus = true;
             }
+        }
+        if (dbgFlags != 0) {   // debug draw do motor: as linhas vêm do DebugLineBuffer e vão para o DrawLine3D
+            const bool interp = timeCtl.renderAlpha(*scene.world) == scene.world->getAlpha();   // após passo manual: pose atual
+            viewer::buildDebugLines(*scene.world, dbgFlags, dbgBuf, interp);
+            for (const physics::DebugLine& l : dbgBuf.lines())
+                DrawLine3D(Vector3{l.ax, l.ay, l.az}, Vector3{l.bx, l.by, l.bz}, Color{l.r, l.g, l.b, l.a});
         }
         for (const viewer::SceneLink& link : scene.links) {   // juntas: linha entre os centros
             const physics::Vector3 pa = renderPose(link.a).position;
@@ -341,7 +393,7 @@ int main(int argc, char** argv) {
         EndMode3D();
 
         // --- HUD ------------------------------------------------------------------------------------------------------
-        DrawText(TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1,
+        hudText(TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1,
                             static_cast<int>(sceneCount), scene.name.c_str(),
                             static_cast<int>(scene.bodies.size())),
                  16, 52, 22, RAYWHITE);
@@ -364,10 +416,10 @@ int main(int argc, char** argv) {
             bx += 4.0f * 42.0f + 12.0f;
             timeCtl.setScaleIndex(sc);
             if (GuiButton(place(26.0f), "<")) uiSceneDelta = -1;
-            GuiLabel(place(64.0f), TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount)));
+            GuiLabel(place(84.0f), TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount)));
             if (GuiButton(place(26.0f), ">")) uiSceneDelta = 1;
             if (GuiButton(place(92.0f), "Reset cam")) uiResetCam = true;
-            if (GuiButton(place(130.0f), pivotSelected ? "Alvo: selecionado" : "Alvo: mundo")) uiPivot = true;
+            if (GuiButton(place(150.0f), pivotSelected ? "Alvo: selecionado" : "Alvo: mundo")) uiPivot = true;
         }
 
         // Painel do quatérnio do corpo em foco (a pose que está sendo DESENHADA, no modo escolhido).
@@ -375,7 +427,7 @@ int main(int argc, char** argv) {
         if (hasFocus) {
             const physics::Quaternion& q = focusPose.rotation;
             const physics::Real qn = q.norm();
-            const Color txt{240, 190, 110, 255};
+            const Color txt = kAccent;
             const float x0 = quatPanel.x + 12.0f;
             float y0 = quatPanel.y + 34.0f;
             DrawText(TextFormat("x %+.4f   y %+.4f", static_cast<double>(q.x), static_cast<double>(q.y)), static_cast<int>(x0),
@@ -387,26 +439,26 @@ int main(int argc, char** argv) {
             // |q| = 1 sempre, exceto no modo "lerp sem normalizar" entre dois passos.
             const bool unit = std::fabs(static_cast<double>(qn) - 1.0) < 1e-4;
             DrawText(TextFormat("|q| = %.6f%s", static_cast<double>(qn), unit ? "" : "   (NAO unitario)"),
-                     static_cast<int>(x0), static_cast<int>(y0), 20, unit ? txt : Color{255, 110, 110, 255});
+                     static_cast<int>(x0), static_cast<int>(y0), 20, unit ? txt : kWarn);
             y0 += 28.0f;
             const viewer::AxisAngleF aa = viewer::toAxisAngle(q);
             DrawText(TextFormat("eixo (%+.3f %+.3f %+.3f)", static_cast<double>(aa.axis.x), static_cast<double>(aa.axis.y),
                                 static_cast<double>(aa.axis.z)),
-                     static_cast<int>(x0), static_cast<int>(y0), 18, LIGHTGRAY);
+                     static_cast<int>(x0), static_cast<int>(y0), 18, kInkDim);
             y0 += 22.0f;
             DrawText(TextFormat("angulo %.1f graus (%.3f rad)", static_cast<double>(aa.angle) * 57.29577951308232,
                                 static_cast<double>(aa.angle)),
-                     static_cast<int>(x0), static_cast<int>(y0), 18, LIGHTGRAY);
+                     static_cast<int>(x0), static_cast<int>(y0), 18, kInkDim);
             y0 += 26.0f;
             const viewer::EulerAngles eu = viewer::toEuler(q);
             const double rad2deg = 57.29577951308232;
             const bool lock = viewer::nearGimbalLock(eu, physics::Real(0.087));   // ~5 graus
             DrawText(TextFormat("Euler  yaw %+.1f  pitch %+.1f  roll %+.1f", static_cast<double>(eu.yaw) * rad2deg,
                                 static_cast<double>(eu.pitch) * rad2deg, static_cast<double>(eu.roll) * rad2deg),
-                     static_cast<int>(x0), static_cast<int>(y0), 18, lock ? Color{255, 110, 110, 255} : LIGHTGRAY);
-            if (lock) DrawText("GIMBAL LOCK: yaw e roll giram o mesmo eixo", static_cast<int>(x0), static_cast<int>(y0) + 22, 16, Color{255, 110, 110, 255});
+                     static_cast<int>(x0), static_cast<int>(y0), 18, lock ? kWarn : kInkDim);
+            if (lock) DrawText("GIMBAL LOCK: yaw e roll giram o mesmo eixo", static_cast<int>(x0), static_cast<int>(y0) + 22, 16, kWarn);
         } else {
-            DrawText("(esta cena nao tem corpo em foco)", static_cast<int>(quatPanel.x) + 12, static_cast<int>(quatPanel.y) + 40, 18, GRAY);
+            DrawText("(esta cena nao tem corpo em foco)", static_cast<int>(quatPanel.x) + 12, static_cast<int>(quatPanel.y) + 40, 18, kInkDim);
         }
 
         // Painel da interpolação de render e do FPS.
@@ -416,13 +468,13 @@ int main(int argc, char** argv) {
             int active = static_cast<int>(mode);
             GuiToggleGroup(Rectangle{x0, interpPanel.y + 34.0f, w / 3.0f, 30.0f}, "slerp;lerp;Euler", &active);
             mode = static_cast<viewer::InterpMode>(active);
-            DrawText(viewer::interpModeName(mode), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 72, 18, RAYWHITE);
+            DrawText(viewer::interpModeName(mode), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 72, 18, kInk);
             const char* help = "";
             if (mode == viewer::InterpMode::Slerp) help = "esferica: giro constante, |q| = 1";
             if (mode == viewer::InterpMode::LerpNoNormalize) help = "reta entre q0 e q1: |q| < 1, o\ncubo encolhe e muda de ritmo";
             if (mode == viewer::InterpMode::Euler) help = "interpola yaw/pitch/roll: caminho\ntorto; pula no gimbal lock";
-            DrawText(help, static_cast<int>(x0), static_cast<int>(interpPanel.y) + 96, 16, LIGHTGRAY);
-            DrawText(TextFormat("FPS de render: %d", fpsApplied), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 144, 18, RAYWHITE);
+            DrawText(help, static_cast<int>(x0), static_cast<int>(interpPanel.y) + 96, 16, kInk);
+            DrawText(TextFormat("FPS de render: %d", fpsApplied), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 144, 18, kInk);
             GuiSlider(Rectangle{x0 + 24.0f, interpPanel.y + 168.0f, w - 64.0f, 22.0f}, "10", "240", &fpsSlider, 10.0f, 240.0f);
             const int wantedFps = static_cast<int>(std::lround(static_cast<double>(fpsSlider)));
             if (wantedFps != fpsApplied) {
@@ -444,16 +496,16 @@ int main(int argc, char** argv) {
             float oy = objPanel.y + 32.0f;
             GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
             oy += 36.0f;
-            const float labelW = 96.0f, valueW = 58.0f;
+            const float labelW = 124.0f, valueW = 88.0f;
             const float barW = ow - labelW - valueW - 8.0f;
             // Uma linha: nome, slider e valor. Devolve true se o USUÁRIO mexeu no slider (mouse sobre a barra com o
             // botão apertado); o valor lido do corpo fora da faixa não conta como edição (o raygui o limita).
             auto sliderRow = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
                 const Rectangle bar{ox + labelW, oy, barW, 20.0f};
                 const float before = v;
-                DrawText(name, static_cast<int>(ox), static_cast<int>(oy) + 2, 16, LIGHTGRAY);
+                DrawText(name, static_cast<int>(ox), static_cast<int>(oy) + 2, 16, kInk);
                 GuiSlider(bar, nullptr, nullptr, &v, lo, hi);
-                DrawText(valueText, static_cast<int>(ox + labelW + barW) + 6, static_cast<int>(oy) + 2, 16, RAYWHITE);
+                DrawText(valueText, static_cast<int>(ox + labelW + barW) + 6, static_cast<int>(oy) + 2, 16, kInk);
                 oy += 26.0f;
                 return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse, bar);
             };
@@ -487,7 +539,7 @@ int main(int argc, char** argv) {
                 moved |= sliderRow("z", pz, -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(pz)));
                 if (moved) viewer::setPosition(world, selected, physics::Vector3(px, py, pz));
                 oy += 6.0f;
-                DrawText(bp.awake ? "estado: acordado" : "estado: dormindo", static_cast<int>(ox), static_cast<int>(oy), 16, bp.awake ? LIGHTGRAY : Color{110, 170, 255, 255});
+                DrawText(bp.awake ? "estado: acordado" : "estado: dormindo", static_cast<int>(ox), static_cast<int>(oy), 16, bp.awake ? kInkDim : kBlueInk);
                 oy += 24.0f;
                 if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Acordar")) viewer::setAwake(world, selected, true);
                 if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Dormir")) viewer::setAwake(world, selected, false);
@@ -515,27 +567,115 @@ int main(int argc, char** argv) {
                                                     static_cast<Real>(oAngleDeg * 0.017453292519943295f));
                 if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
                 oy += 34.0f;
-                DrawText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, GRAY);
+                DrawText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
             }
+        }
+
+        // --- Painel do mundo (V7) -----------------------------------------------------------------------------
+        if (showWorld) {
+            physics::PhysicsWorld& world = *scene.world;
+            GuiPanel(worldPanel, "Mundo e debug (M esconde)");
+            const float wx = worldPanel.x + 12.0f, ww = worldPanel.width - 24.0f;
+            float wy = worldPanel.y + 30.0f;
+            GuiToggleGroup(Rectangle{wx, wy, ww / 4.0f, 26.0f}, "Mundo;Solver;Debug;Stats", &worldTab);
+            wy += 34.0f;
+            const float labelW = 128.0f, valueW = 96.0f;
+            const float barW = ww - labelW - valueW - 8.0f;
+            // Uma linha de slider: devolve true se o usuário mexeu; o valor aparece à direita.
+            auto row = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
+                DrawText(name, static_cast<int>(wx), static_cast<int>(wy) + 2, 16, kInk);
+                const bool edited = sliderEdited(Rectangle{wx + labelW, wy, barW, 20.0f}, v, lo, hi);
+                DrawText(valueText, static_cast<int>(wx + labelW + barW) + 6, static_cast<int>(wy) + 2, 16, kInk);
+                wy += 26.0f;
+                return edited;
+            };
+            using physics::Real;
+            viewer::WorldParams wp = viewer::captureWorld(world);
+            bool changed = false;
+            if (worldTab == 0) {   // Mundo
+                float gx = static_cast<float>(wp.gravity.x), gy = static_cast<float>(wp.gravity.y), gz = static_cast<float>(wp.gravity.z);
+                if (row("gravidade x", gx, -30.0f, 30.0f, TextFormat("%+.2f m/s2", static_cast<double>(gx)))) { wp.gravity.x = gx; changed = true; }
+                if (row("gravidade y", gy, -30.0f, 30.0f, TextFormat("%+.2f m/s2", static_cast<double>(gy)))) { wp.gravity.y = gy; changed = true; }
+                if (row("gravidade z", gz, -30.0f, 30.0f, TextFormat("%+.2f m/s2", static_cast<double>(gz)))) { wp.gravity.z = gz; changed = true; }
+                float hz = static_cast<float>(1.0 / static_cast<double>(wp.fixedDt));
+                if (row("fisica (passo)", hz, 10.0f, 240.0f, TextFormat("%.0f Hz", static_cast<double>(hz)))) { wp.fixedDt = Real(1) / static_cast<Real>(hz); changed = true; }
+                bool sl = wp.sleepEnabled;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " sleeping ligado", &sl);
+                if (sl != wp.sleepEnabled) { wp.sleepEnabled = sl; changed = true; }
+                wy += 26.0f;
+                float st = static_cast<float>(wp.sleepTime);
+                if (row("dormir apos", st, 0.05f, 10.0f, TextFormat("%.2f s", static_cast<double>(st)))) { wp.sleepTime = st; changed = true; }
+            } else if (worldTab == 1) {   // Solver
+                float vi = static_cast<float>(wp.velocityIterations), pi = static_cast<float>(wp.positionIterations);
+                if (row("iter. veloc.", vi, 1.0f, 50.0f, TextFormat("%d", static_cast<int>(std::lround(static_cast<double>(vi)))))) { wp.velocityIterations = static_cast<int>(std::lround(static_cast<double>(vi))); changed = true; }
+                if (row("iter. posicao", pi, 0.0f, 20.0f, TextFormat("%d%s", static_cast<int>(std::lround(static_cast<double>(pi))), pi < 0.5f ? " (Baumg.)" : ""))) { wp.positionIterations = static_cast<int>(std::lround(static_cast<double>(pi))); changed = true; }
+                float ls = static_cast<float>(wp.linearSlop), vs = static_cast<float>(wp.velocitySlop);
+                if (row("slop linear", ls, 0.0f, 0.05f, TextFormat("%.1f mm", static_cast<double>(ls) * 1000.0))) { wp.linearSlop = ls; changed = true; }
+                if (row("slop veloc.", vs, 0.0f, 2.0f, TextFormat("%.2f m/s", static_cast<double>(vs)))) { wp.velocitySlop = vs; changed = true; }
+                bool ws = wp.warmStarting;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " warm starting", &ws);
+                if (ws != wp.warmStarting) { wp.warmStarting = ws; changed = true; }
+                wy += 26.0f;
+                DrawText("menos iteracoes: mais barato, mais mole", static_cast<int>(wx), static_cast<int>(wy), 14, kInkDim);
+            } else if (worldTab == 2) {   // Debug
+                const std::vector<viewer::DebugFlagInfo>& table = viewer::debugFlagTable();
+                const float colW = ww / 2.0f;
+                for (std::size_t i = 0; i < table.size(); ++i) {
+                    const float cx = wx + (i < 5 ? 0.0f : colW), cy = wy + static_cast<float>(i < 5 ? i : i - 5) * 24.0f;
+                    bool on = (dbgFlags & table[i].flag) != 0;
+                    GuiCheckBox(Rectangle{cx, cy, 20.0f, 20.0f}, TextFormat(" %s", table[i].label), &on);
+                    if (on) dbgFlags |= table[i].flag; else dbgFlags &= ~table[i].flag;
+                }
+                wy += 5.0f * 24.0f + 6.0f;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " esconder modelos (so o debug)", &hideModels);
+                wy += 30.0f;
+                if (GuiButton(Rectangle{wx, wy, ww / 2.0f - 4.0f, 26.0f}, "Padrao")) dbgFlags = static_cast<std::uint32_t>(physics::kDebugDefault);
+                if (GuiButton(Rectangle{wx + ww / 2.0f + 4.0f, wy, ww / 2.0f - 4.0f, 26.0f}, "Desligar")) dbgFlags = 0;
+            } else {   // Stats
+                bool prof = profilingOn;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " medir tempos (profiling)", &prof);
+                if (prof != profilingOn) { profilingOn = prof; world.setProfilingEnabled(profilingOn); }
+                wy += 28.0f;
+                const physics::WorldStats st = world.getStats();
+                auto line = [&](const char* text) { DrawText(text, static_cast<int>(wx), static_cast<int>(wy), 16, kInk); wy += 19.0f; };
+                line(TextFormat("corpos %d   acordados %d   dormindo %d", st.bodies, st.awakeBodies, st.sleepingBodies));
+                line(TextFormat("ilhas acordadas %d   juntas %d (solver %d)", st.islands, st.joints, st.solverJoints));
+                line(TextFormat("pares %d   tocando %d   congelados %d", st.pairs, st.touchingPairs, st.frozenPairs));
+                line(TextFormat("pontos de contato %d   no solver %d", st.contactPoints, st.solverContacts));
+                line(TextFormat("passo #%llu   linhas de debug %d", static_cast<unsigned long long>(st.stepCount), static_cast<int>(dbgBuf.size())));
+                if (profilingOn) {
+                    line(TextFormat("tempos do ultimo passo (us): total %.0f", st.timings.totalUs));
+                    line(TextFormat("  colisao %.0f   ilhas %.0f   restricoes %.0f", st.timings.collisionUs, st.timings.islandsUs, st.timings.constraintsUs));
+                    line(TextFormat("  integracao %.0f   sono/eventos %.0f", st.timings.integrationUs, st.timings.sleepEventsUs));
+                } else {
+                    line("ligue \"medir tempos\" para ver os custos");
+                }
+            }
+            // Rodapé das abas Mundo e Solver: restaurar os valores com que a cena foi criada.
+            if (worldTab <= 1) {
+                wy = worldPanel.y + worldPanel.height - 36.0f;
+                if (GuiButton(Rectangle{wx, wy, ww, 26.0f}, "Restaurar padroes da cena")) { wp = sceneDefaults; changed = true; }
+            }
+            if (changed) viewer::applyWorld(world, wp);
         }
 
         if (selected != physics::kInvalidBodyId) {
             const physics::RigidBody& sb = scene.world->getBody(selected);
-            DrawText(TextFormat("selecionado: corpo %u   massa %.2f kg   |v| = %.2f m/s   %s", static_cast<unsigned>(selected),
+            hudText(TextFormat("selecionado: corpo %u   massa %.2f kg   |v| = %.2f m/s   %s", static_cast<unsigned>(selected),
                                 static_cast<double>(sb.getMass()), static_cast<double>(sb.getLinearVelocity().length()),
                                 sb.isAwake() ? "acordado" : "dormindo"),
                      static_cast<int>(quatPanel.x), static_cast<int>(quatPanel.y + quatPanel.height) + 8, 18, Color{255, 235, 60, 255});
         }
-        DrawText(TextFormat("%d FPS   fisica %.0f Hz   passo #%llu   alpha = %.2f   tempo %s%s", GetFPS(),
+        hudText(TextFormat("%d FPS   fisica %.0f Hz   passo #%llu   alpha = %.2f   tempo %s%s", GetFPS(),
                             1.0 / static_cast<double>(scene.world->getFixedTimeStep()),
                             static_cast<unsigned long long>(scene.world->getStats().stepCount),
                             static_cast<double>(timeCtl.renderAlpha(*scene.world)),
                             viewer::TimeControl::scaleLabel(timeCtl.scaleIndex()), timeCtl.paused() ? "   [PAUSADO]" : ""),
-                 16, GetScreenHeight() - 80, 18, LIGHTGRAY);
-        DrawText("esq: selecionar/arrastar   dir ou roda apertada: girar   roda: zoom   B/O: lancar   Del/X: apagar", 16,
-                 GetScreenHeight() - 54, 18, GRAY);
-        DrawText("Espaco/P: pausa   . : passo   setas/1-9: cena   R: reiniciar   I: interpolacao   T: alvo   Home: camera   ESC: sair", 16,
-                 GetScreenHeight() - 30, 18, GRAY);
+                 16, GetScreenHeight() - 80, 18, Color{235, 238, 245, 255});
+        hudText("esq: selecionar/arrastar   dir ou roda apertada: girar   roda: zoom   B/O: lancar   Del/X: apagar", 16,
+                 GetScreenHeight() - 54, 18, Color{200, 205, 215, 255});
+        hudText("Espaco/P: pausa   . : passo   setas/1-9: cena   R: reiniciar   I: interpolacao   T: alvo   Home: camera   M: mundo   ESC: sair", 16,
+                 GetScreenHeight() - 30, 18, Color{200, 205, 215, 255});
         EndDrawing();
 
         // --- Modo automático --------------------------------------------------------------------------------------------

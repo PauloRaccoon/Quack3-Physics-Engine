@@ -18,6 +18,14 @@ FixedTimestepAccumulator::FixedTimestepAccumulator(Real fixedDt, int maxSubSteps
     }
 }
 
+bool FixedTimestepAccumulator::setFixedDt(Real dt) {
+    if (!std::isfinite(dt) || !(dt > Real(0))) return false;
+    const Real alpha = accumulator_ / fixedDt_;   // fração do passo já acumulada, em [0, 1)
+    fixedDt_ = dt;
+    accumulator_ = alpha * dt;
+    return true;
+}
+
 int FixedTimestepAccumulator::advance(Real frameTime) {
     if (!std::isfinite(frameTime) || !(frameTime > Real(0))) return 0;
 

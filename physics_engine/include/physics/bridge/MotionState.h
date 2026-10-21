@@ -71,6 +71,11 @@ public:
     Real getAlpha() const { return accumulator_ / fixedDt_; }
 
     Real getFixedDt() const { return fixedDt_; }
+
+    /// Troca o passo fixo em tempo de execução. `dt` deve ser finito e > 0 (senão não muda nada e
+    /// devolve false). O α é preservado: o tempo acumulado é reescalado para a mesma fração do novo passo,
+    /// então a interpolação de render não dá salto.
+    bool setFixedDt(Real dt);
     int getMaxSubSteps() const { return maxSubSteps_; }
     Real getAccumulator() const { return accumulator_; }
     Real getDroppedTime() const { return dropped_; }

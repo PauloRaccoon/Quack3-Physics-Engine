@@ -261,7 +261,23 @@ public:
         wakeAll();
     }
     Real getFixedTimeStep() const { return accumulator_.getFixedDt(); }
+    /// Troca o Δt da simulação em tempo de execução. Aceita [kMinRuntimeTimeStep, kMaxRuntimeTimeStep]
+    /// (1e-4 a 1 s); fora disso, valor não finito, ou chamado de dentro de um callback de contato: não muda
+    /// nada e devolve false. O α de render é preservado. Os impulsos acumulados do warm start NÃO são
+    /// reescalados: no passo seguinte à troca o solver recomeça um pouco menos "aquecido".
+    bool setFixedTimeStep(Real dt);
+    static constexpr Real kMinRuntimeTimeStep = Real(1e-4);
+    static constexpr Real kMaxRuntimeTimeStep = Real(1);
+
+    /// Liga/desliga a medição de tempo das fases do passo (WorldStats::timings; ver enableProfiling).
+    /// Desligar zera os tempos guardados (não deixa valores velhos parecerem atuais).
+    void setProfilingEnabled(bool on) {
+        profiling_ = on;
+        if (!on) timings_ = StepTimings();
+    }
+    bool isProfilingEnabled() const { return profiling_; }
     SolverSettings& solverSettings() { return solver_.settings(); }
+    const SolverSettings& solverSettings() const { return solver_.settings(); }
     IntegratorSettings& integratorSettings() { return integrator_; }
 
     /// Filtro adicional de colisão entre corpos (camadas, grupos...). Vale para

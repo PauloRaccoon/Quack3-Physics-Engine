@@ -538,6 +538,12 @@ void PhysicsWorld::stepImpl(Real dt) {
     dispatchEvents();
 }
 
+bool PhysicsWorld::setFixedTimeStep(Real dt) {
+    if (stepping_) return false;
+    if (!std::isfinite(dt) || dt < kMinRuntimeTimeStep || dt > kMaxRuntimeTimeStep) return false;
+    return accumulator_.setFixedDt(dt);
+}
+
 void PhysicsWorld::step() {
     if (stepping_) throw std::logic_error("PhysicsWorld: step() chamado de dentro de um callback de contato");
     clearContactEvents();

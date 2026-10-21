@@ -37,6 +37,7 @@ projeto/
 | V4 | selecionar por clique (raycast), arrastar com mola, lançar e apagar corpos, câmera com alvo mundo/selecionado e reset (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
 | V5 | barra de controle: pausa/play, passo a passo, câmera lenta, reiniciar, cena < >, resetar câmera, alvo da câmera (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
 | V6 | painel do objeto selecionado: massa, atrito, restituição, amortecimentos, gravidade, posição, velocidades, orientação por eixo-ângulo, acordar/dormir (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
+| V7 | painel do mundo (gravidade, Δt, solver, sleeping), debug draw do motor no viewer, estatísticas e tempos (ver seção 9); o motor ganhou `setFixedTimeStep` e `setProfilingEnabled` | feita (janela não testada por mim; núcleo e motor testados) |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
@@ -259,11 +260,22 @@ Medido (`float`): 196 caixas em repouso custam **608 µs/passo acordadas e 9 µs
 Verificado em 12 mundos aleatórios × 600 passos (~77 mil pares): nunca há um par de corpos dinâmicos em
 contato com um dormindo e o outro acordado.
 
+### Mudar o passo fixo em execução
+
+```cpp
+world.setFixedTimeStep(1.0f / 120.0f);   // aceita 1e-4 a 1 s; devolve false se recusado
+```
+
+O acumulador preserva o α (a fração do passo já acumulada), então a imagem não "pula". Os impulsos de
+*warm start* guardados vêm do Δt antigo e **não são reescalados**: a primeira iteração após a troca pode
+ter um pequeno transiente de contato.
+
 ### Perfilamento
 
 ```cpp
 PhysicsWorldSettings s;  s.enableProfiling = true;       // desligado por padrão: custo zero
 PhysicsWorld world(s);
+world.setProfilingEnabled(true);   // também dá para ligar/desligar em execução (desligar zera os tempos)
 const WorldStats st = world.getStats();
 // st.timings.collisionUs / islandsUs / constraintsUs / integrationUs / sleepEventsUs / totalUs  (último passo)
 // st.awakeBodies, st.sleepingBodies, st.islands, st.frozenPairs, st.solverContacts, st.solverJoints
@@ -387,7 +399,7 @@ Roteiro, em etapas pequenas (cada uma deixa o viewer funcionando):
 | **V4. Interação** (feita) | Clique seleciona (raycast do motor), arrastar com mola, lançar caixa ou esfera, apagar corpo. **Câmera:** girar ao redor do alvo com a **roda do mouse pressionada** (botão do meio) + mover o mouse (o botão direito continua girando); o alvo é o **centro do mundo** ou o **objeto selecionado** (alternável por tecla `T`; sem seleção, volta ao centro da cena); `Home` já reseta a câmera. Núcleo testado (229 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
 | **V5. Barra de controle** (feita) | Botão **Pausa/Play** (substitui a tecla `P`, com o estado visível), **passo a passo** (1 passo fixo), reiniciar, câmera lenta (escala de tempo) e seletor de cena. Botão **Resetar câmera** (volta ao enquadramento inicial da cena, com o alvo no centro do mundo) e botão do alvo da câmera (mundo / objeto selecionado). Núcleo `TimeControl` testado (318 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | pequena |
 | **V6. Painel do objeto** (feita) | Parâmetros ajustáveis do objeto selecionado: massa, atrito, restituição, amortecimento linear e angular, escala de gravidade, posição, orientação (quatérnio e eixo-ângulo), velocidades linear e angular, acordar/dormir. Núcleo `BodyEditor` testado (370 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
-| **V7. Painel do mundo e debug** | Debug draw do motor ligado ao `DrawLine3D`, com caixas de seleção por flag. Parâmetros ajustáveis do mundo: gravidade, Δt fixo, iterações de velocidade, `positionIterations`, sleeping e slop. Painel de estatísticas e tempos. | média |
+| **V7. Painel do mundo e debug** (feita) | Debug draw do motor ligado ao `DrawLine3D`, com caixas de seleção por flag. Parâmetros ajustáveis do mundo: gravidade, Δt fixo, iterações de velocidade, `positionIterations`, sleeping e slop. Painel de estatísticas e tempos. Núcleo `WorldEditor` testado (420 verificações, float/double/ASan+UBSan; ctest do motor 13/13); `main.cpp` só verificado por tipos. | média |
 | **V8. Adicionar objetos** | Painel para adicionar objetos na cena atual: tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho, massa, posição, orientação inicial (eixo-ângulo ou quatérnio) e velocidade. Entra no ponto clicado ou é lançado da câmera. | média |
 | **V9. Eventos e sleeping** | Cor por estado (dormindo/acordado), flash no início de contato proporcional à velocidade de impacto, contador de contatos. | pequena |
 | **V10. Fechamento** | Janela redimensionável, README do viewer, testes de fumaça sem janela no `ctest`, empacotamento. | pequena |

@@ -12,6 +12,7 @@
 //   6. registro da V2: todas as cenas constroem, rodam 300 passos finitas/estáveis, nenhum corpo
 //      atravessa o chão ou escapa; juntas mantêm os elos; setDistance da câmera.
 // =============================================================================
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -20,6 +21,7 @@
 #include "viewer/core/BodyEditor.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/OrbitCamera.h"
+#include "viewer/core/WorldEditor.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
 #include "viewer/core/Scene.h"
@@ -758,6 +760,158 @@ static void testBodyEditor() {
     }
 }
 
+static void testWorldEditor() {
+    using namespace physics;
+    const Real dt = Real(1) / Real(60);
+
+    // --- captura dos padrões -----------------------------------------------------------------------------------
+    Scene s = makeStackScene();
+    PhysicsWorld& w = *s.world;
+    const WorldParams def = captureWorld(w);
+    CHECK(std::fabs(def.gravity.y + Real(9.81)) < Real(0.01) && def.gravity.x == Real(0));
+    CHECK(std::fabs(def.fixedDt - dt) < Real(1e-6));
+    CHECK(def.velocityIterations >= 1 && def.positionIterations >= 0 && def.warmStarting && def.sleepEnabled);
+    CHECK(def.sleepTime > Real(0) && def.linearSlop >= Real(0));
+
+    // --- setters: limites e entradas inválidas -------------------------------------------------------------------
+    CHECK(setVelocityIterations(w, 9999) && w.solverSettings().velocityIterations == worldlimits::kMaxVelocityIterations);
+    CHECK(setVelocityIterations(w, -3) && w.solverSettings().velocityIterations == 1);
+    CHECK(setPositionIterations(w, 0) && w.solverSettings().positionIterations == 0);
+    CHECK(setPositionIterations(w, 99) && w.solverSettings().positionIterations == worldlimits::kMaxPositionIterations);
+    CHECK(setLinearSlop(w, Real(5)) && std::fabs(w.solverSettings().linearSlop - worldlimits::kMaxLinearSlop) < Real(1e-9));
+    CHECK(setLinearSlop(w, Real(-1)) && w.solverSettings().linearSlop == Real(0));
+    CHECK(!setLinearSlop(w, std::numeric_limits<Real>::quiet_NaN()));
+    CHECK(setVelocitySlop(w, Real(50)) && std::fabs(w.solverSettings().velocitySlop - worldlimits::kMaxVelocitySlop) < Real(1e-9));
+    CHECK(setSleepTime(w, Real(0)) && std::fabs(w.sleepSettings().timeToSleep - worldlimits::kMinSleepTime) < Real(1e-9));
+    CHECK(!setSleepTime(w, std::numeric_limits<Real>::infinity()));
+    setWarmStarting(w, false);
+    CHECK(!w.solverSettings().warmStarting);
+    CHECK(!setWorldGravity(w, Vector3(0, std::numeric_limits<Real>::quiet_NaN(), 0)));
+    CHECK(setWorldGravity(w, Vector3(1000, -1000, 0)));
+    CHECK(std::fabs(w.getGravity().x - worldlimits::kMaxGravity) < Real(1e-6) && std::fabs(w.getGravity().y + worldlimits::kMaxGravity) < Real(1e-6));
+    CHECK(setWorldFixedStep(w, Real(1) / Real(120)) && std::fabs(w.getFixedTimeStep() - Real(1) / Real(120)) < Real(1e-7));
+    CHECK(!setWorldFixedStep(w, Real(0)) && !setWorldFixedStep(w, Real(5)));
+
+    // --- ida e volta: aplicar os padrões restaura tudo -------------------------------------------------------------
+    applyWorld(w, def);
+    const WorldParams back = captureWorld(w);
+    CHECK(back.gravity.nearlyEqual(def.gravity, Real(1e-6)) && std::fabs(back.fixedDt - def.fixedDt) < Real(1e-7) &&
+          back.velocityIterations == def.velocityIterations && back.positionIterations == def.positionIterations &&
+          std::fabs(back.linearSlop - def.linearSlop) < Real(1e-9) && std::fabs(back.velocitySlop - def.velocitySlop) < Real(1e-9) &&
+          back.warmStarting == def.warmStarting && back.sleepEnabled == def.sleepEnabled &&
+          std::fabs(back.sleepTime - def.sleepTime) < Real(1e-9));
+
+    // --- efeitos físicos ---------------------------------------------------------------------------------------------------
+    // Gravidade zero: a caixa em queda livre não cai; gravidade lunar: cai mais devagar.
+    {
+        Scene a = makeFallingBoxScene();
+        a.world->getBody(a.focus).setAngularVelocity(Vector3(0, 0, 0));
+        const Real y0 = a.world->getBody(a.focus).getWorldCenterOfMass().y;
+        setWorldGravity(*a.world, Vector3(0, 0, 0));
+        for (int i = 0; i < 60; ++i) a.world->update(dt);
+        CHECK(std::fabs(a.world->getBody(a.focus).getWorldCenterOfMass().y - y0) < Real(0.01));
+        setWorldGravity(*a.world, Vector3(0, Real(-1.62), 0));
+        for (int i = 0; i < 60; ++i) a.world->update(dt);
+        const Real drop = y0 - a.world->getBody(a.focus).getWorldCenterOfMass().y;
+        CHECK(std::fabs(drop - Real(0.5) * Real(1.62)) < Real(0.1));   // y = g t²/2 em 1 s
+    }
+    // Δt em runtime: 1 s de tempo de render continua sendo 1 s simulado.
+    {
+        Scene a = makeFallingBoxScene(), b = makeFallingBoxScene();
+        a.world->getBody(a.focus).setAngularVelocity(Vector3(0, 0, 0));
+        b.world->getBody(b.focus).setAngularVelocity(Vector3(0, 0, 0));
+        CHECK(setWorldFixedStep(*b.world, Real(1) / Real(240)));
+        for (int i = 0; i < 60; ++i) { a.world->update(dt); b.world->update(dt); }
+        CHECK(std::fabs(a.world->getBody(a.focus).getWorldCenterOfMass().y - b.world->getBody(b.focus).getWorldCenterOfMass().y) < Real(0.15));
+    }
+    // Sleeping: com ele ligado a pilha dorme; desligado ninguém dorme; desligar acorda quem dormia.
+    {
+        Scene a = makeStackScene();
+        for (int i = 0; i < 360; ++i) a.world->update(dt);
+        CHECK(a.world->getStats().sleepingBodies > 0);
+        setSleepEnabled(*a.world, false);
+        CHECK(a.world->getStats().sleepingBodies == 0);                       // acordou todos
+        for (int i = 0; i < 360; ++i) a.world->update(dt);
+        CHECK(a.world->getStats().sleepingBodies == 0);                       // e ninguém dorme mais
+        setSleepEnabled(*a.world, true);
+        for (int i = 0; i < 360; ++i) a.world->update(dt);
+        CHECK(a.world->getStats().sleepingBodies > 0);
+    }
+    // Menos iterações = mais penetração: pilha com 1 iteração afunda mais que com 20 (ambas finitas).
+    {
+        auto lowestGap = [&](int iters) {
+            Scene a = makeStackScene();
+            setVelocityIterations(*a.world, iters);
+            setPositionIterations(*a.world, 0);
+            Real minY = Real(100);
+            for (int i = 0; i < 180; ++i) {
+                a.world->update(dt);
+                minY = std::min(minY, a.world->getBody(a.focus).getWorldCenterOfMass().y);
+            }
+            return a.world->getBody(a.focus).getWorldCenterOfMass().isFinite() ? minY : Real(-1);
+        };
+        const Real few = lowestGap(1), many = lowestGap(20);
+        CHECK(few > Real(0) && many > Real(0));
+        CHECK(many >= few - Real(1e-4));   // 20 iterações nunca afunda mais que 1
+    }
+
+    // --- profiling em runtime e estatísticas ------------------------------------------------------------------------
+    {
+        Scene a = makePyramidScene();
+        for (int i = 0; i < 60; ++i) a.world->update(dt);
+        a.world->setProfilingEnabled(true);
+        for (int i = 0; i < 5; ++i) a.world->update(dt);
+        const WorldStats st = a.world->getStats();
+        CHECK(st.bodies == 16 && st.timings.totalUs > 0.0 && st.pairs > 0 && st.touchingPairs > 0 && st.contactPoints > 0);
+        CHECK(st.timings.collisionUs >= 0.0 && st.timings.constraintsUs >= 0.0);
+    }
+
+    // --- debug draw: tabela e cada flag gerando linhas ------------------------------------------------------------------
+    {
+        const std::vector<DebugFlagInfo>& tab = debugFlagTable();
+        CHECK(tab.size() == 9);
+        std::uint32_t all = 0;
+        bool distinct = true;
+        for (const DebugFlagInfo& f : tab) {
+            distinct = distinct && (all & f.flag) == 0 && f.label != nullptr && f.label[0] != '\0';
+            all |= f.flag;
+        }
+        CHECK(distinct && all == kDebugAll);
+
+        DebugLineBuffer buf;
+        Scene stack = makeStackScene();
+        for (int i = 0; i < 60; ++i) stack.world->update(dt);
+        CHECK(buildDebugLines(*stack.world, 0, buf) == 0 && buf.size() == 0);
+        for (std::uint32_t f : {kDebugShapes, kDebugAABBs, kDebugFatAABBs, kDebugContactPoints, kDebugContactNormals,
+                                kDebugCenterOfMass, kDebugBodyAxes})
+            CHECK(buildDebugLines(*stack.world, f, buf) > 0);
+        Scene chain = makeChainScene();
+        for (int i = 0; i < 30; ++i) chain.world->update(dt);
+        CHECK(buildDebugLines(*chain.world, kDebugJoints, buf) > 0);
+        Scene rain = makeRainScene();
+        for (int i = 0; i < 40; ++i) rain.world->update(dt);
+        CHECK(buildDebugLines(*rain.world, kDebugVelocities, buf) > 0);
+        const std::size_t nAll = buildDebugLines(*rain.world, kDebugAll, buf);
+        CHECK(nAll > buildDebugLines(*rain.world, kDebugShapes, buf));
+        // Pose interpolada x pose atual: com α ≈ 0,5 as linhas dos corpos em queda diferem; com α = 0 não.
+        {
+            Scene fall = makeRainScene();
+            for (int i = 0; i < 40; ++i) fall.world->update(dt);
+            fall.world->update(dt * Real(0.5));   // sobra metade de um passo no acumulador (α ≈ 0,5)
+            DebugLineBuffer a, b;
+            const std::size_t na = buildDebugLines(*fall.world, kDebugShapes, a, true);
+            const std::size_t nb = buildDebugLines(*fall.world, kDebugShapes, b, false);
+            CHECK(na == nb && na > 0);
+            float maxDiff = 0.0f;
+            for (std::size_t i = 0; i < std::min(na, nb); ++i) maxDiff = std::max(maxDiff, std::fabs(a.lines()[i].ay - b.lines()[i].ay));
+            CHECK(fall.world->getAlpha() > Real(0.3) && fall.world->getAlpha() < Real(0.7));
+            CHECK(maxDiff > 0.005f);
+        }
+        // Reaproveita a capacidade: chamar de novo não acumula.
+        CHECK(buildDebugLines(*rain.world, kDebugAll, buf) == nAll && buf.size() == nAll);
+    }
+}
+
 static void testCameraDistance() {
     OrbitCamera c;
     c.setDistance(30.0f);
@@ -781,6 +935,7 @@ int main() {
     testRenderPose();
     testInteraction();
     testBodyEditor();
+    testWorldEditor();
     testTimeControl();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

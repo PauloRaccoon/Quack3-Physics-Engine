@@ -911,8 +911,70 @@ static void testScaleAndRobustness() {
     CHECK(ok);
 }
 
+// -----------------------------------------------------------------------------
+// Ajustes em tempo de execução: Δt fixo e profiling
+// -----------------------------------------------------------------------------
+static void testRuntimeSettings() {
+    // Acumulador: troca de passo preserva α.
+    FixedTimestepAccumulator acc(Real(1) / Real(60), 8);
+    CHECK(acc.advance(Real(0.4) / Real(60)) == 0);
+    CHECK(nearlyEqual(acc.getAlpha(), Real(0.4), Real(1e-5)));
+    CHECK(acc.setFixedDt(Real(1) / Real(30)));
+    CHECK(nearlyEqual(acc.getFixedDt(), Real(1) / Real(30), Real(1e-7)));
+    CHECK(nearlyEqual(acc.getAlpha(), Real(0.4), Real(1e-5)));
+    CHECK(!acc.setFixedDt(Real(0)) && !acc.setFixedDt(Real(-1)) &&
+          !acc.setFixedDt(std::numeric_limits<Real>::quiet_NaN()) &&
+          !acc.setFixedDt(std::numeric_limits<Real>::infinity()));
+    CHECK(nearlyEqual(acc.getFixedDt(), Real(1) / Real(30), Real(1e-7)));
+    CHECK(acc.advance(Real(1) / Real(30)) == 1);   // o novo passo vale
+
+    // Mundo: Δt em runtime. 1/120 s: um quadro de 1/60 s executa 2 passos.
+    PhysicsWorld w;
+    RigidBodyDesc d;
+    d.shape = std::make_shared<SphereShape>(Real(0.5));
+    d.mass = Real(1);
+    d.transform = Transform(Vector3(0, 100, 0));
+    d.angularDamping = Real(0);
+    const BodyId id = w.createBody(d);
+    CHECK(w.setFixedTimeStep(Real(1) / Real(120)));
+    CHECK(nearlyEqual(w.getFixedTimeStep(), Real(1) / Real(120), Real(1e-7)));
+    const std::uint64_t s0 = w.getStats().stepCount;
+    CHECK(w.update(Real(1) / Real(60)) == 2);
+    CHECK(w.getStats().stepCount == s0 + 2);
+    CHECK(!w.setFixedTimeStep(Real(0)) && !w.setFixedTimeStep(Real(2)) && !w.setFixedTimeStep(Real(1e-6)) &&
+          !w.setFixedTimeStep(std::numeric_limits<Real>::quiet_NaN()));
+    CHECK(nearlyEqual(w.getFixedTimeStep(), Real(1) / Real(120), Real(1e-7)));
+    CHECK(w.setFixedTimeStep(w.kMinRuntimeTimeStep) && w.setFixedTimeStep(w.kMaxRuntimeTimeStep));
+
+    // Queda livre: 1 s simulado com Δt = 1/60 e com Δt = 1/240 chega quase ao mesmo lugar (Euler semi-implícito).
+    PhysicsWorld a, b;
+    const BodyId ia = a.createBody(d), ib = b.createBody(d);
+    CHECK(b.setFixedTimeStep(Real(1) / Real(240)));
+    for (int i = 0; i < 60; ++i) a.step();
+    for (int i = 0; i < 240; ++i) b.step();
+    const Real ya = a.getBody(ia).getWorldCenterOfMass().y, yb = b.getBody(ib).getWorldCenterOfMass().y;
+    CHECK(std::fabs(ya - yb) < Real(0.1));
+    CHECK(std::fabs(yb - (Real(100) - Real(0.5) * Real(9.81))) < Real(0.1));   // y = y0 - g t²/2
+    (void)id;
+
+    // Profiling liga/desliga em tempo de execução.
+    PhysicsWorld p;
+    p.createBody(d);
+    CHECK(!p.isProfilingEnabled());
+    p.step();
+    CHECK(p.getStats().timings.totalUs == 0.0);
+    p.setProfilingEnabled(true);
+    CHECK(p.isProfilingEnabled());
+    p.step();
+    CHECK(p.getStats().timings.totalUs > 0.0);
+    p.setProfilingEnabled(false);
+    p.step();
+    CHECK(p.getStats().timings.totalUs == 0.0);
+}
+
 int main() {
     testAccumulator();
+    testRuntimeSettings();
     testMotionState();
     testBufferedBridge();
     testCollisionWorld();
