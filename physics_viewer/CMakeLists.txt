@@ -33,6 +33,8 @@ add_library(viewer_core STATIC
   src/core/Interaction.cpp
   src/core/TimeControl.cpp
   src/core/BodyEditor.cpp
+  src/core/PolyShapes.cpp
+  src/core/ObjectSpawner.cpp
   src/core/WorldEditor.cpp
   src/core/Scene.cpp)
 target_include_directories(viewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

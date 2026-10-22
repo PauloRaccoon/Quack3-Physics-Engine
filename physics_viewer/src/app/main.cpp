@@ -35,6 +35,12 @@
 // debug draw do motor desenhadas com DrawLine3D, mais "esconder modelos") e Stats (contagens e tempos
 // por fase). A edição passa por viewer/core/WorldEditor.h.
 //
+// V8 — painel "Adicionar objeto" (direita, abas Objeto | Adicionar): tipo (caixa, esfera, tetraedro,
+// octaedro, prisma, pirâmide), tamanho, massa, atrito, restituição, posição, orientação inicial (eixo-ângulo
+// OU quatérnio w x y z, que é normalizado) e velocidades linear/angular. "Adicionar" cria no ponto dado;
+// "posicionar com clique" cria onde o mouse aponta (com prévia em fio); "Lancar da camera" dispara o objeto
+// na direção para onde a câmera olha. A criação passa por viewer/core/ObjectSpawner.h.
+//
 // Controles: Espaço ou P = pausar/continuar; . (ponto) = um passo (pausa se estiver rodando);
 //            esquerdo = selecionar/arrastar (roda = profundidade durante o arrasto); direito ou
 //            roda pressionada + mover = girar a câmera; roda = zoom; T = alvo da câmera;
@@ -61,6 +67,7 @@
 
 #include "viewer/core/BodyEditor.h"
 #include "viewer/core/Interaction.h"
+#include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
@@ -234,6 +241,12 @@ int main(int argc, char** argv) {
     physics::DebugLineBuffer dbgBuf;
     viewer::WorldParams sceneDefaults = viewer::captureWorld(*scene.world);   // "Restaurar padroes da cena"
     int objTab = 0;
+    // Painel "Adicionar objeto" (V8): aba principal (0 = Objeto, 1 = Adicionar) e o rascunho do que será criado.
+    int mainTab = 0, addTab = 0, kindIdx = 0, qMode = 0, addFailFrames = 0;
+    bool clickPlace = false;
+    float sizeF = 1.0f, massS = 1.0f /* raiz da massa */, fricF = 0.5f, restF = 0.2f, launchSpd = 18.0f;
+    float spPos[3] = {0.0f, 6.0f, 0.0f}, spVel[3] = {0.0f, 0.0f, 0.0f}, spAngV[3] = {0.0f, 0.0f, 0.0f};
+    float spAxis[3] = {0.0f, 1.0f, 0.0f}, spAngDeg = 0.0f, spQ[4] = {1.0f, 0.0f, 0.0f, 0.0f};
     physics::BodyId lastSelected = physics::kInvalidBodyId;
     float oAxisX = 0.0f, oAxisY = 1.0f, oAxisZ = 0.0f, oAngleDeg = 0.0f;
 
@@ -255,10 +268,9 @@ int main(int argc, char** argv) {
         // Altura adaptativa: termina antes da faixa de texto de baixo (96 px), com no mínimo 180 px.
         const float worldH = std::min(276.0f, std::max(180.0f, static_cast<float>(GetScreenHeight()) - 96.0f - worldY));
         const Rectangle worldPanel{quatPanel.x, worldY, quatPanel.width, worldH};
-        const Rectangle objPanel{screenW - 376.0f, interpPanel.y + interpPanel.height + 8.0f, 360.0f, 270.0f};
-        const bool objPanelShown = selected != physics::kInvalidBodyId;
+        const Rectangle objPanel{screenW - 376.0f, interpPanel.y + interpPanel.height + 8.0f, 360.0f, mainTab == 1 ? 344.0f : 270.0f};
         const bool overGui = CheckCollisionPointRec(mouse, quatPanel) || CheckCollisionPointRec(mouse, interpPanel) ||
-                             CheckCollisionPointRec(mouse, controlBar) || (objPanelShown && CheckCollisionPointRec(mouse, objPanel)) ||
+                             CheckCollisionPointRec(mouse, controlBar) || CheckCollisionPointRec(mouse, objPanel) ||
                              (showWorld && CheckCollisionPointRec(mouse, worldPanel));
 
         // --- Entrada: câmera ------------------------------------------------------------------------------
@@ -329,7 +341,39 @@ int main(int argc, char** argv) {
         const Ray mouseRay = GetScreenToWorldRay(mouse, cam);
         const physics::Vector3 rayO(mouseRay.position.x, mouseRay.position.y, mouseRay.position.z);
         const physics::Vector3 rayD(mouseRay.direction.x, mouseRay.direction.y, mouseRay.direction.z);
-        if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !overGui) {
+        // Orientação do rascunho (quatérnio unitário; entrada nula -> identidade) e ponto de colocação por clique.
+        bool spOk = true;
+        const physics::Quaternion spOrient =
+            qMode == 0 ? viewer::orientationFromAxisAngle(physics::Vector3(spAxis[0], spAxis[1], spAxis[2]),
+                                                          static_cast<physics::Real>(spAngDeg * 0.017453292519943295f), &spOk)
+                       : viewer::orientationFromQuaternion(spQ[0], spQ[1], spQ[2], spQ[3], &spOk);
+        auto makeSpawn = [&]() {
+            viewer::SpawnParams sp;
+            sp.kind = static_cast<viewer::SpawnKind>(kindIdx);
+            sp.size = sizeF;
+            sp.mass = massS * massS;
+            sp.friction = fricF;
+            sp.restitution = restF;
+            sp.position = physics::Vector3(spPos[0], spPos[1], spPos[2]);
+            sp.orientation = spOrient;
+            sp.velocity = physics::Vector3(spVel[0], spVel[1], spVel[2]);
+            sp.angularVelocity = physics::Vector3(spAngV[0], spAngV[1], spAngV[2]);
+            return sp;
+        };
+        auto afterSpawn = [&](physics::BodyId id) {
+            if (id == physics::kInvalidBodyId) { addFailFrames = 120; return; }
+            selected = id;   // o corpo novo fica selecionado (aba Objeto mostra os parâmetros dele)
+            drag.end();
+        };
+        physics::Vector3 placePt;
+        const bool hasPlace = clickPlace && mainTab == 1 && !overGui && !drag.active() &&
+                              viewer::spawnPointFromRay(scene, rayO, rayD, sizeF, placePt);
+        if (hasPlace && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            viewer::SpawnParams sp = makeSpawn();
+            sp.position = placePt;
+            for (int i = 0; i < 3; ++i) spPos[i] = static_cast<float>(placePt[i]);
+            afterSpawn(viewer::spawnBody(scene, sp));
+        } else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !overGui && !(clickPlace && mainTab == 1)) {
             const viewer::PickResult pick = viewer::pickBody(scene, rayO, rayD);
             selected = pick.hit ? pick.body : physics::kInvalidBodyId;   // clicar no vazio ou no chão desmarca
             if (pick.hit) drag.begin(scene, pick);
@@ -383,6 +427,11 @@ int main(int argc, char** argv) {
             const physics::Vector3 pb = renderPose(link.b).position;
             DrawLine3D(Vector3{float(pa.x), float(pa.y), float(pa.z)}, Vector3{float(pb.x), float(pb.y), float(pb.z)},
                        Color{235, 235, 235, 255});
+        }
+        if (hasPlace) {   // prévia do "posicionar com clique": fio amarelo no ponto de criação
+            const Vector3 c{static_cast<float>(placePt.x), static_cast<float>(placePt.y), static_cast<float>(placePt.z)};
+            if (kindIdx == 1) DrawSphereWires(c, sizeF * 0.5f, 8, 12, YELLOW);
+            else DrawCubeWires(c, sizeF, sizeF, sizeF, YELLOW);
         }
         if (drag.active()) {   // a mola: do ponto agarrado até onde o mouse aponta
             DrawLine3D(Vector3{float(drag.anchorWorld().x), float(drag.anchorWorld().y), float(drag.anchorWorld().z)},
@@ -483,23 +532,25 @@ int main(int argc, char** argv) {
             }
         }
         // --- Painel do objeto selecionado (V6) --------------------------------------------------------------
-        if (objPanelShown && scene.world->isValidBody(selected)) {
+        {
             physics::PhysicsWorld& world = *scene.world;
-            if (selected != lastSelected) {   // rascunho da orientação parte da orientação atual do corpo
+            const bool selValid = world.isValidBody(selected);
+            if (selValid && selected != lastSelected) {   // rascunho da orientação parte da orientação atual do corpo
                 lastSelected = selected;
                 const viewer::AxisAngleF aa0 = viewer::toAxisAngle(world.getBody(selected).getOrientation());
                 oAxisX = aa0.axis.x; oAxisY = aa0.axis.y; oAxisZ = aa0.axis.z;
                 oAngleDeg = aa0.angle * 57.29578f;
             }
-            GuiPanel(objPanel, TextFormat("Objeto selecionado (corpo %u)", static_cast<unsigned>(selected)));
+            if (addFailFrames > 0) --addFailFrames;
+            GuiPanel(objPanel, addFailFrames > 0 ? "Objetos - NAO foi possivel criar"
+                               : (mainTab == 0 && selValid ? TextFormat("Objeto selecionado (corpo %u)", static_cast<unsigned>(selected))
+                                                           : "Objetos"));
             const float ox = objPanel.x + 12.0f, ow = objPanel.width - 24.0f;
             float oy = objPanel.y + 32.0f;
-            GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
+            GuiToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Objeto;Adicionar", &mainTab);
             oy += 36.0f;
             const float labelW = 124.0f, valueW = 88.0f;
             const float barW = ow - labelW - valueW - 8.0f;
-            // Uma linha: nome, slider e valor. Devolve true se o USUÁRIO mexeu no slider (mouse sobre a barra com o
-            // botão apertado); o valor lido do corpo fora da faixa não conta como edição (o raygui o limita).
             auto sliderRow = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
                 const Rectangle bar{ox + labelW, oy, barW, 20.0f};
                 const float before = v;
@@ -510,6 +561,70 @@ int main(int argc, char** argv) {
                 return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse, bar);
             };
             using physics::Real;
+            if (mainTab == 1) {   // ---- Adicionar objeto (V8) ----
+                GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Forma;Posicao;Orient;Veloc", &addTab);
+                oy += 34.0f;
+                if (addTab == 0) {   // forma, tamanho, massa, material
+                    const int orig = kindIdx;
+                    int ka = orig < 3 ? orig : -1, kb = orig >= 3 ? orig - 3 : -1;
+                    GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "caixa;esfera;tetraedro", &ka);
+                    oy += 28.0f;
+                    GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "octaedro;prisma;piramide", &kb);
+                    oy += 32.0f;
+                    if (ka >= 0 && ka != (orig < 3 ? orig : -99)) kindIdx = ka;
+                    else if (kb >= 0 && kb != (orig >= 3 ? orig - 3 : -99)) kindIdx = kb + 3;
+                    sliderRow("tamanho", sizeF, 0.2f, 4.0f, TextFormat("%.2f", static_cast<double>(sizeF)));
+                    sliderRow("massa", massS, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(massS * massS)));
+                    sliderRow("atrito", fricF, 0.0f, 2.0f, TextFormat("%.2f", static_cast<double>(fricF)));
+                    sliderRow("restituicao", restF, 0.0f, 1.0f, TextFormat("%.2f", static_cast<double>(restF)));
+                } else if (addTab == 1) {   // posição e velocidade de lançamento
+                    sliderRow("x", spPos[0], -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(spPos[0])));
+                    sliderRow("y", spPos[1], -2.0f, 20.0f, TextFormat("%+.2f m", static_cast<double>(spPos[1])));
+                    sliderRow("z", spPos[2], -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(spPos[2])));
+                    sliderRow("veloc. lanc.", launchSpd, 1.0f, 40.0f, TextFormat("%.1f m/s", static_cast<double>(launchSpd)));
+                    DrawText("lancar: sai 2 m a frente da camera", static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kInkDim);
+                } else if (addTab == 2) {   // orientação inicial: eixo-ângulo OU quatérnio
+                    GuiToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Eixo-angulo;Quaternio", &qMode);
+                    oy += 32.0f;
+                    if (qMode == 0) {
+                        sliderRow("eixo x", spAxis[0], -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(spAxis[0])));
+                        sliderRow("eixo y", spAxis[1], -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(spAxis[1])));
+                        sliderRow("eixo z", spAxis[2], -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(spAxis[2])));
+                        sliderRow("angulo", spAngDeg, 0.0f, 360.0f, TextFormat("%.0f gr", static_cast<double>(spAngDeg)));
+                    } else {
+                        sliderRow("w", spQ[0], -1.0f, 1.0f, TextFormat("%+.3f", static_cast<double>(spQ[0])));
+                        sliderRow("x", spQ[1], -1.0f, 1.0f, TextFormat("%+.3f", static_cast<double>(spQ[1])));
+                        sliderRow("y", spQ[2], -1.0f, 1.0f, TextFormat("%+.3f", static_cast<double>(spQ[2])));
+                        sliderRow("z", spQ[3], -1.0f, 1.0f, TextFormat("%+.3f", static_cast<double>(spQ[3])));
+                    }
+                    if (spOk)
+                        DrawText(TextFormat("q = (%+.3f, %+.3f, %+.3f, %+.3f)", static_cast<double>(spOrient.w), static_cast<double>(spOrient.x),
+                                            static_cast<double>(spOrient.y), static_cast<double>(spOrient.z)),
+                                 static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kInkDim);
+                    else
+                        DrawText("entrada nula: usa a identidade", static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kWarn);
+                } else {   // velocidades iniciais
+                    const char* vn[3] = {"v x", "v y", "v z"};
+                    const char* wn[3] = {"w x", "w y", "w z"};
+                    for (int i = 0; i < 3; ++i) sliderRow(vn[i], spVel[i], -20.0f, 20.0f, TextFormat("%+.2f m/s", static_cast<double>(spVel[i])));
+                    for (int i = 0; i < 3; ++i) sliderRow(wn[i], spAngV[i], -20.0f, 20.0f, TextFormat("%+.2f r/s", static_cast<double>(spAngV[i])));
+                }
+                // Rodapé fixo: posicionar com clique + botões Adicionar / Lançar.
+                const float by = objPanel.y + objPanel.height - 62.0f;
+                GuiCheckBox(Rectangle{ox, by, 20.0f, 20.0f}, " posicionar com clique (esquerdo)", &clickPlace);
+                if (GuiButton(Rectangle{ox, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Adicionar")) afterSpawn(viewer::spawnBody(scene, makeSpawn()));
+                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Lancar da camera")) {
+                    const physics::Vector3 camPos(cam.position.x, cam.position.y, cam.position.z);
+                    const physics::Vector3 camDir(cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z);
+                    afterSpawn(viewer::launchFrom(scene, makeSpawn(), camPos, camDir, static_cast<physics::Real>(launchSpd)));
+                }
+            } else if (!selValid) {
+                DrawText("Nenhum objeto selecionado.", static_cast<int>(ox), static_cast<int>(oy) + 4, 16, kInk);
+                DrawText("Clique num corpo na cena, ou use a aba", static_cast<int>(ox), static_cast<int>(oy) + 32, 14, kInkDim);
+                DrawText("Adicionar para criar um novo.", static_cast<int>(ox), static_cast<int>(oy) + 50, 14, kInkDim);
+            } else {
+            GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
+            oy += 36.0f;
             viewer::BodyParams bp;
             viewer::readParams(world, selected, bp);
             const physics::RigidBody& body = world.getBody(selected);
@@ -568,6 +683,7 @@ int main(int argc, char** argv) {
                 if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
                 oy += 34.0f;
                 DrawText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+            }
             }
         }
 

@@ -3,7 +3,7 @@
 Janela de demonstração do `../physics_engine` (C++17 + [raylib](https://www.raylib.com/)). Fica numa pasta
 **ao lado** do motor, que continua sem nenhuma dependência gráfica.
 
-> Estado: **V7.1** (V7 com correções de legibilidade: painel do mundo e debug draw, além do painel do objeto, da barra de controle, da interação com o mouse e do quatérnio na tela). O roteiro completo
+> Estado: **V8** (painel "Adicionar objeto"; sobre a V7.1, que corrigiu a legibilidade dos painéis). O roteiro completo
 > está no `README.md` da pasta acima.
 
 ## Compilar e rodar
@@ -46,7 +46,7 @@ Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `
 | `B` / `O` | lançar uma caixa / esfera na direção do mouse (18 m/s) |
 | `Delete` ou `X` | apagar o corpo selecionado (juntas ligadas a ele também somem) |
 | painel à direita, em cima | escolher o modo de interpolação e o FPS de render (slider de 10 a 240) |
-| painel à direita, embaixo | editar o corpo selecionado (abas Material, Posicao, Veloc, Orient) |
+| painel à direita, embaixo | abas **Objeto** (editar o corpo selecionado: Material, Posicao, Veloc, Orient) e **Adicionar** (criar objetos, ver abaixo) |
 | `←` / `→` | cena anterior / próxima |
 | `1` … `9` | ir direto para a cena |
 | `R` | reiniciar a cena atual (mantém a câmera) |
@@ -106,9 +106,25 @@ Observações:
 - As cenas 8 e 9 têm Δt de 0,5 s e 0,35 s, abaixo da faixa do slider de frequência (10 Hz); o slider mostra o
   extremo, mas o valor só muda se você o arrastar.
 
+## Adicionar objetos (V8)
+
+Aba **Adicionar** do painel à direita. A criação passa por `ObjectSpawner.h` (sem raylib, testado).
+
+| Sub-aba | O que define |
+|---|---|
+| Forma | tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho (0,2 a 4; 1 = os mesmos poliedros da cena Formas), massa, atrito, restituição |
+| Posicao | posição x y z; velocidade de lançamento |
+| Orient | orientação inicial por **eixo-ângulo** ou por **quatérnio w x y z** (normalizado; o quatérnio efetivo aparece na tela; entrada nula usa a identidade) |
+| Veloc | velocidades linear e angular iniciais |
+
+- **Adicionar** cria o objeto na posição dos sliders e o seleciona (a aba Objeto mostra os parâmetros dele).
+- **Posicionar com clique**: ligado, o clique esquerdo na cena cria o objeto onde o mouse aponta (chão ou topo de outro corpo, com folga proporcional ao tamanho) e uma prévia em fio amarelo mostra o ponto; selecionar fica desligado enquanto estiver ligado e a aba Adicionar aberta.
+- **Lancar da camera**: o objeto nasce 2 m à frente da câmera e sai na direção para onde ela olha, com a velocidade do slider.
+- Limites: massa 0,05 a 100 kg, |v| ≤ 60 m/s, |w| ≤ 30 rad/s; entradas não finitas ou mundo cheio não criam nada (o título do painel avisa).
+
 ## Painel do objeto selecionado (V6)
 
-Aparece à direita quando há um corpo selecionado (clique). A edição passa por `BodyEditor.h` (sem raylib,
+Aba **Objeto** do painel à direita; mostra os parâmetros quando há um corpo selecionado (clique). A edição passa por `BodyEditor.h` (sem raylib,
 testado); todas as funções recusam corpos estáticos, ids inválidos e valores não finitos, e limitam o que
 excede a faixa.
 
@@ -187,7 +203,7 @@ desenha os eixos locais do corpo (X vermelho, Y verde, Z azul).
 ```text
 physics_viewer/
 ├── CMakeLists.txt
-├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
+├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
 ├── src/core/
 ├── src/app/main.cpp       a janela (única parte que usa raylib)
 └── tests/viewer_tests.cpp testes do núcleo, sem janela
@@ -198,7 +214,7 @@ raylib é fina.
 
 ## O que foi verificado
 
-- Núcleo e testes (420 verificações: matemática, câmera, as 9 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
+- Núcleo e testes (503 verificações: matemática, câmera, as 9 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
 - `main.cpp`: passa na verificação de tipos contra os cabeçalhos da raylib 5.5 e do raygui 4.0, sem warnings, em `float` e
   `double`. A convenção de matriz foi conferida no código-fonte da raylib (campo `mN` = elemento `N` do
   array passado a `rlMultMatrixf`).
@@ -206,5 +222,7 @@ raylib é fina.
   painéis é escuro (os painéis do raygui são claros) e o texto direto sobre a cena ganha uma faixa escura
   translúcida. **Não verificado por mim:** o ajuste fino dos tamanhos depois da V7.1 (não consigo abrir a janela
   no ambiente de desenvolvimento, sem X11/OpenGL); as larguras foram calculadas a partir das capturas.
+  Na V8, confira: se o painel Adicionar cabe (344 px de altura) e nenhum texto é cortado, se as duas fileiras de tipos
+  mudam a forma, se a prévia amarela acompanha o mouse e se o clique cria o objeto no ponto certo.
   Confira na V7.1: se todo texto dos painéis é legível, se cada slider mostra seu número à direita, se nenhum
   rótulo é cortado pela barra do slider e se o texto de baixo (FPS e atalhos) aparece sobre a faixa escura.

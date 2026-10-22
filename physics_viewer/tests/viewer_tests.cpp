@@ -20,6 +20,7 @@
 
 #include "viewer/core/BodyEditor.h"
 #include "viewer/core/Interaction.h"
+#include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/WorldEditor.h"
 #include "viewer/core/RenderPose.h"
@@ -924,6 +925,109 @@ static void testCameraDistance() {
     CHECK(near(c.getDistance(), OrbitCamera::kMinDistance, 1e-6f));   // NaN ignorado
 }
 
+static void testObjectSpawner() {
+    using namespace physics;
+    Scene sc = makeFallingBoxScene();
+    const std::size_t n0 = sc.bodies.size();
+    const BodyId focus0 = sc.focus;
+
+    // Todos os tipos: cria, registra, tem massa e orientacao unitaria.
+    for (int k = 0; k < kSpawnKindCount; ++k) {
+        SpawnParams p;
+        p.kind = static_cast<SpawnKind>(k);
+        p.position = Vector3(Real(k), 5, 0);
+        p.orientation = Quaternion(Real(2), 0, 0, 0);   // nao unitario
+        const BodyId id = spawnBody(sc, p);
+        CHECK(id != kInvalidBodyId);
+        CHECK(sc.world->isValidBody(id));
+        CHECK(sc.bodies.back().id == id);
+        CHECK(std::fabs(sc.world->getBody(id).getOrientation().norm() - Real(1)) < Real(1e-5));
+        CHECK(sc.world->getBody(id).getMass() > Real(0));
+        CHECK(std::string(spawnKindName(p.kind)).size() > 2);
+        const SceneBody& sb = sc.bodies.back();
+        CHECK((p.kind == SpawnKind::Box) == (sb.kind == ShapeKind::Box));
+        CHECK((p.kind == SpawnKind::Sphere) == (sb.kind == ShapeKind::Sphere));
+        CHECK((k >= 2) == (sb.poly != nullptr));
+    }
+    CHECK(sc.bodies.size() == n0 + kSpawnKindCount);
+    CHECK(sc.focus == focus0);
+
+    // Limites: tamanho, massa, velocidades.
+    SpawnParams big;
+    big.size = Real(1000);
+    big.mass = Real(1e9);
+    big.velocity = Vector3(1000, 0, 0);
+    big.angularVelocity = Vector3(0, 1000, 0);
+    big.position = Vector3(1e9, 0, 0);
+    const BodyId b = spawnBody(sc, big);
+    CHECK(b != kInvalidBodyId);
+    const RigidBody& rb = sc.world->getBody(b);
+    CHECK(rb.getMass() <= spawnlimits::kMaxMass * Real(1.0001));
+    CHECK(rb.getLinearVelocity().length() <= spawnlimits::kMaxLinearSpeed * Real(1.0001));
+    CHECK(rb.getAngularVelocity().length() <= spawnlimits::kMaxAngularSpeed * Real(1.0001));
+    CHECK(rb.getTransform().position.x <= spawnlimits::kMaxCoordinate * Real(1.0001));
+    SpawnParams tiny;
+    tiny.size = Real(0);
+    tiny.mass = Real(0);
+    CHECK(spawnBody(sc, tiny) != kInvalidBodyId);
+
+    // Entradas invalidas: nada muda.
+    const std::size_t n1 = sc.bodies.size();
+    const Real nan = std::numeric_limits<Real>::quiet_NaN();
+    SpawnParams bad;
+    bad.mass = nan;
+    CHECK(spawnBody(sc, bad) == kInvalidBodyId);
+    bad = SpawnParams();
+    bad.position = Vector3(0, nan, 0);
+    CHECK(spawnBody(sc, bad) == kInvalidBodyId);
+    bad = SpawnParams();
+    bad.orientation = Quaternion(0, 0, 0, 0);
+    CHECK(spawnBody(sc, bad) == kInvalidBodyId);
+    bad = SpawnParams();
+    bad.velocity = Vector3(nan, 0, 0);
+    CHECK(spawnBody(sc, bad) == kInvalidBodyId);
+    CHECK(sc.bodies.size() == n1);
+
+    // Orientacao.
+    bool ok = false;
+    Quaternion q = orientationFromQuaternion(0, 0, 3, 4, &ok);
+    CHECK(ok && std::fabs(q.norm() - Real(1)) < Real(1e-5));
+    q = orientationFromQuaternion(0, 0, 0, 0, &ok);
+    CHECK(!ok && std::fabs(q.w - Real(1)) < Real(1e-6));
+    q = orientationFromQuaternion(nan, 0, 0, 0, &ok);
+    CHECK(!ok);
+    q = orientationFromAxisAngle(Vector3(0, 2, 0), Real(3.14159265358979), &ok);
+    CHECK(ok && std::fabs(q.y - Real(1)) < Real(1e-4) && std::fabs(q.w) < Real(1e-4));
+    q = orientationFromAxisAngle(Vector3(0, 0, 0), Real(1), &ok);
+    CHECK(!ok && std::fabs(q.w - Real(1)) < Real(1e-6));
+
+    // Clique: raio de cima para o chao -> ponto acima do chao.
+    Vector3 pt;
+    CHECK(spawnPointFromRay(sc, Vector3(5, 10, 5), Vector3(0, -1, 0), Real(1), pt));
+    CHECK(pt.y > Real(0.5) && pt.y < Real(2) && std::fabs(pt.x - Real(5)) < Real(1e-3));
+    CHECK(!spawnPointFromRay(sc, Vector3(0, 10, 0), Vector3(0, 1, 0), Real(1), pt));   // para o ceu
+    CHECK(!spawnPointFromRay(sc, Vector3(0, 10, 0), Vector3(0, 0, 0), Real(1), pt));
+    CHECK(!spawnPointFromRay(sc, Vector3(nan, 10, 0), Vector3(0, -1, 0), Real(1), pt));
+
+    // Lancamento.
+    SpawnParams lp;
+    lp.velocity = Vector3(99, 99, 99);   // deve ser substituida
+    const BodyId l = launchFrom(sc, lp, Vector3(0, 3, 10), Vector3(0, 0, -5), Real(12));
+    CHECK(l != kInvalidBodyId);
+    const RigidBody& lb = sc.world->getBody(l);
+    CHECK(std::fabs(lb.getLinearVelocity().z + Real(12)) < Real(1e-4) && std::fabs(lb.getLinearVelocity().x) < Real(1e-4));
+    CHECK(std::fabs(lb.getTransform().position.z - Real(8)) < Real(1e-4));
+    CHECK(launchFrom(sc, lp, Vector3(0, 3, 10), Vector3(0, 0, 0), Real(12)) == kInvalidBodyId);
+    CHECK(launchFrom(sc, lp, Vector3(0, 3, 10), Vector3(0, 0, -1), nan) == kInvalidBodyId);
+
+    // A simulacao segue estavel com os novos corpos.
+    for (int i = 0; i < 300; ++i) sc.world->step();
+    bool finite = true;
+    for (const SceneBody& s : sc.bodies)
+        finite = finite && sc.world->getBody(s.id).getTransform().position.isFinite();
+    CHECK(finite);
+}
+
 int main() {
     testMatchesEngine();
     testKnownRotation();
@@ -937,6 +1041,7 @@ int main() {
     testBodyEditor();
     testWorldEditor();
     testTimeControl();
+    testObjectSpawner();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
