@@ -1,0 +1,95 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name Pendulo-martelo (eixo Z)
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 0 1.8 0 10
+body
+  type static
+  shape box 10 0.5 10
+  position 0 -0.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 120 130 140
+end
+body
+  type static
+  shape none
+  position 0 3.2 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 170 170 170
+end
+body
+  type dynamic
+  shape box 0.12 1.5 0.12
+  mass 5
+  position -1.3368111 2.5196059 0
+  orientation 0.8525245 -0 -0 -0.52268726
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+  focus
+end
+body
+  type dynamic
+  shape box 0.4 0.4 0.4
+  mass 0.8
+  position 0.6 0.4 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape box 0.4 0.4 0.4
+  mass 0.8
+  position 0.6 1.201 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape box 0.4 0.4 0.4
+  mass 0.8
+  position 0.6 2.002 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+joint hinge 2 3 0 3.2 0 0 0 1 0
+link 2 3

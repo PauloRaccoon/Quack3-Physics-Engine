@@ -1,0 +1,152 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name Corrente (juntas)
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 2 5 0 12
+body
+  type static
+  shape none
+  position 0 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 170 170 170
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 0.25 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 0.75 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 1.25 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 1.75 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 2.25 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 2.75 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 3.25 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape box 0.25 0.08 0.08
+  mass 0.5
+  position 3.75 8 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+  focus
+end
+joint ballsocket 1 2 0 8 0 0
+joint ballsocket 2 3 0.5 8 0 0
+joint ballsocket 3 4 1 8 0 0
+joint ballsocket 4 5 1.5 8 0 0
+joint ballsocket 5 6 2 8 0 0
+joint ballsocket 6 7 2.5 8 0 0
+joint ballsocket 7 8 3 8 0 0
+joint ballsocket 8 9 3.5 8 0 0
+link 1 2
+link 2 3
+link 3 4
+link 4 5
+link 5 6
+link 6 7
+link 7 8
+link 8 9

@@ -39,6 +39,10 @@ projeto/
 | V6 | painel do objeto selecionado: massa, atrito, restituição, amortecimentos, gravidade, posição, velocidades, orientação por eixo-ângulo, acordar/dormir (ver seção 9) | feita (janela não testada por mim; núcleo testado) |
 | V7 | painel do mundo (gravidade, Δt, solver, sleeping), debug draw do motor no viewer, estatísticas e tempos (ver seção 9); o motor ganhou `setFixedTimeStep` e `setProfilingEnabled` | feita (janela não testada por mim; núcleo e motor testados) |
 | V8 | painel **Adicionar objeto** (tipo, tamanho, massa, posição, orientação por eixo-ângulo ou quatérnio, velocidades; criar no ponto clicado ou lançar da câmera), abas Objeto/Adicionar | feita (janela não testada por mim; núcleo testado: 503 verificações) |
+| V9 | eventos e sleeping: cor por estado (dormindo = azul), flash e anéis no início do contato (∝ velocidade de impacto), aba Evento com contadores | feita (janela não testada por mim; núcleo testado: 523 verificações) |
+| V10 | fechamento: janela com tamanho mínimo e F11, `viewer_smoke` no ctest (todas as cenas 20 s + fuzz), READMEs finais | feita (janela não testada por mim; ctest do viewer 2/2 em float, double e ASan) |
+| V11 | cenas 10–14: impacto na pirâmide, porta giratória (eixo Y), gangorra (eixo Z), pêndulo-martelo (eixo Z), bilhar; HUD com a velocidade angular w | feita (janela não testada por mim; 962 verificações do viewer em float, double e ASan) |
+| V12 | salvar/carregar cenas em `.scene` (texto, quatérnio w x y z): aba Cenas, 14 exemplos, `scene_export`, arquivo inválido não altera a cena | feita (janela não testada por mim; 1336 + 467 verificações em float, double e ASan) |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
@@ -402,9 +406,13 @@ Roteiro, em etapas pequenas (cada uma deixa o viewer funcionando):
 | **V6. Painel do objeto** (feita) | Parâmetros ajustáveis do objeto selecionado: massa, atrito, restituição, amortecimento linear e angular, escala de gravidade, posição, orientação (quatérnio e eixo-ângulo), velocidades linear e angular, acordar/dormir. Núcleo `BodyEditor` testado (370 verificações, float/double/ASan+UBSan); `main.cpp` só verificado por tipos. | média |
 | **V7. Painel do mundo e debug** (feita) | Debug draw do motor ligado ao `DrawLine3D`, com caixas de seleção por flag. Parâmetros ajustáveis do mundo: gravidade, Δt fixo, iterações de velocidade, `positionIterations`, sleeping e slop. Painel de estatísticas e tempos. Núcleo `WorldEditor` testado (420 verificações, float/double/ASan+UBSan; ctest do motor 13/13); `main.cpp` só verificado por tipos. | média |
 | **V8. Adicionar objetos** (feita) | Painel para adicionar objetos na cena atual: tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho, massa, posição, orientação inicial (eixo-ângulo ou quatérnio) e velocidade. Entra no ponto clicado ou é lançado da câmera. | média |
-| **V9. Eventos e sleeping** | Cor por estado (dormindo/acordado), flash no início de contato proporcional à velocidade de impacto, contador de contatos. | pequena |
-| **V10. Fechamento** | Janela redimensionável, README do viewer, testes de fumaça sem janela no `ctest`, empacotamento. | pequena |
-| **V11. Opcional, para o relatório** | Exportar a trajetória e os quatérnios em CSV para gráficos, e um modo apresentação. | pequena |
+| **V9. Eventos e sleeping** (feita) | Cor por estado (dormindo/acordado), flash no início de contato proporcional à velocidade de impacto, contador de contatos. | pequena |
+| **V10. Fechamento** (feita) | Janela redimensionável, README do viewer, testes de fumaça sem janela no `ctest`, empacotamento. | pequena |
+| **V11. Cenas de colisão e rotação** (feita) | Cena nova "Impacto na pirâmide" (projétil com velocidade inicial contra a 3ª cena; a Pirâmide original continua) e cenas com **eixo de rotação fixo** (`HingeJoint` ligado ao chão: porta/pá/catraca atingida na lateral gira só em torno do eixo): porta, cata-vento, pêndulo-martelo e bilhar de esferas. HUD mostra o quatérnio e a velocidade angular do objeto articulado. | pequena |
+| **V12. Salvar e carregar cenas** (feita) | Formato de arquivo de texto (`.scene`, legível, com versão): corpos (forma, tamanho, massa, material, pose como quatérnio, velocidades), juntas, gravidade e Δt. Botões **Salvar cena** / **Carregar cena** (campo de nome; pasta `scenes/`) e cenas de exemplo no formato. Testes de ida e volta sem janela. | média |
+| **V13. Editor de cena** | Criar a própria cena do zero: cena vazia (só chão ou nem isso), objetos **estáticos** (paredes, rampas) e dinâmicos, **juntas** (dobradiça com eixo, bola-soquete, distância) entre dois corpos escolhidos ou entre um corpo e o mundo, ajustar tudo com os painéis existentes e salvar pela V12. | média |
+| **V14. Importar objeto 3D com textura** | Carregar `.obj` (+ `.mtl`) com textura (`.png`/`.jpg`) numa cena: o modelo é desenhado com a textura da raylib e a colisão usa o **fecho convexo** dos vértices (algoritmo próprio, sem biblioteca; o motor só aceita formas convexas), com opção de caixa/esfera envolvente. Escala, massa e orientação inicial por quatérnio. Entra no arquivo de cena (V12). | grande (dividida em V14a fecho convexo + testes e V14b modelo/textura na janela) |
+| **V15. Opcional, para o relatório** | Exportar a trajetória e os quatérnios em CSV para gráficos, e um modo apresentação. | pequena |
 
 Observações do planejamento:
 

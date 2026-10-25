@@ -1,0 +1,580 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name Chuva de corpos
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 0 3 0 18
+body
+  type static
+  shape box 10 0.5 10
+  position 0 -0.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 120 130 140
+end
+body
+  type static
+  shape box 10 1 0.25
+  position 0 1 9.75
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 10 1 0.25
+  position 0 1 -9.75
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 0.25 1 10
+  position 9.75 1 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 0.25 1 10
+  position -9.75 1 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -2.7336295 2 -2.872505
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.9781451 2.6 -2.769039
+  orientation -0.7416072 0.43648812 -0.05589641 0.50633246
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+  focus
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 2.8346725 3.2 -2.0121696
+  orientation 0.6669031 0.28631535 -0.40621302 -0.555207
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 1.94205 3.8000002 0.5796108
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -2.3549619 4.4 2.9890013
+  orientation -0.8653905 0.24337944 -0.3460438 -0.26855105
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.18270111 5 -1.2495214
+  orientation -0.6042993 -0.47147328 -0.21102871 0.6066318
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 1.8486428 5.6000004 -1.7079792
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.2002875 6.2000003 1.9699368
+  orientation 0.9355925 -0.19941966 0.19888574 -0.21293902
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.28317785 6.8 -2.8292727
+  orientation 0.08686176 -0.62040126 -0.24885751 -0.7386659
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -0.45599747 7.4 -1.1173614
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -0.8481138 8 0.89142036
+  orientation -0.9497369 0.27136573 0.116292045 -0.10409917
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.9976678 8.6 1.6748395
+  orientation -0.2956621 -0.4902969 -0.6089529 -0.5489711
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -1.6142725 9.200001 2.133039
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.36914396 9.8 2.9803162
+  orientation 0.849461 -0.20946467 0.230198 0.42608622
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 2.316667 10.400001 -2.3162785
+  orientation 0.8499838 -0.4621954 -0.19717005 0.15819898
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -0.56232834 11 1.5012522
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.5231124 11.6 -2.1195831
+  orientation -0.9867883 0.01697358 0.14902255 0.061262604
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -0.5221019 12.200001 2.7850132
+  orientation -0.5617043 -0.3942074 0.08593254 0.7222912
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 0.14132023 12.8 1.1248784
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -2.4487724 13.400001 2.5814943
+  orientation 0.91921526 -0.14131677 -0.3446129 -0.12772962
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.5816661 14 0.08593607
+  orientation -0.36998183 -0.7205917 0.26858702 0.52126956
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 0.14192057 14.6 0.6233697
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 1.3466578 15.200001 0.3132856
+  orientation 0.14788257 0.77944475 0.36337 0.48842487
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.26316643 15.8 2.938549
+  orientation -0.47078022 -0.588626 0.5215451 0.39984512
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -1.3114439 16.400002 -0.22020507
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 2.4515285 17 2.728876
+  orientation -0.4207066 -0.3007779 0.48783106 0.70324934
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 1.7829113 17.6 1.6880417
+  orientation 0.67570764 0.14162138 0.7183338 -0.08578549
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 2.8847742 18.2 0.09452486
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -0.5313587 18.800001 -1.1515696
+  orientation 0.39429677 -0.6298518 -0.55759746 0.37000242
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 2.9141788 19.400002 -0.80568504
+  orientation 0.9925715 -0.034384318 -0.07049916 0.093002774
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position -0.3730688 20 1.631001
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.5493108 20.6 1.5213223
+  orientation -0.32136366 -0.34382537 0.8248661 0.3132178
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -2.025003 21.2 -1.007677
+  orientation 0.059753045 -0.74404365 0.52497363 0.40893924
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape sphere 0.35
+  mass 1
+  position 2.2060776 21.800001 0.8921106
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position -1.74416 22.400002 0.9674597
+  orientation 0.9337054 -0.28068095 -0.21274938 -0.06442203
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape box 0.3 0.3 0.3
+  mass 1
+  position 0.7770703 23 -2.5374813
+  orientation 0.78705627 0.3489013 -0.45282575 -0.23186035
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end

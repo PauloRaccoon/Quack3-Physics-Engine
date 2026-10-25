@@ -35,6 +35,8 @@ add_library(viewer_core STATIC
   src/core/BodyEditor.cpp
   src/core/PolyShapes.cpp
   src/core/ObjectSpawner.cpp
+  src/core/ContactTracker.cpp
+  src/core/SceneFile.cpp
   src/core/WorldEditor.cpp
   src/core/Scene.cpp)
 target_include_directories(viewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -45,11 +47,20 @@ else()
   target_compile_options(viewer_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
+# Ferramenta (sem raylib): grava as cenas embutidas como arquivos .scene de exemplo.
+add_executable(scene_export tools/scene_export.cpp)
+target_link_libraries(scene_export PRIVATE viewer_core)
+
 if(VIEWER_BUILD_TESTS)
   enable_testing()
   add_executable(viewer_tests tests/viewer_tests.cpp)
   target_link_libraries(viewer_tests PRIVATE viewer_core)
   add_test(NAME viewer_tests COMMAND viewer_tests)
+
+  # Fumaça sem janela: todas as cenas por 20 s + fuzz de criar/editar/apagar/trocar de cena.
+  add_executable(viewer_smoke tests/viewer_smoke.cpp)
+  target_link_libraries(viewer_smoke PRIVATE viewer_core)
+  add_test(NAME viewer_smoke COMMAND viewer_smoke)
 endif()
 
 # -----------------------------------------------------------------------------
@@ -77,7 +88,14 @@ if(VIEWER_BUILD_APP)
   FetchContent_MakeAvailable(raygui)
 
   add_executable(physics_viewer src/app/main.cpp)
+  # Opcional: roda a janela por alguns quadros e sai (precisa de tela/OpenGL; por isso desligado por padrão).
+  option(VIEWER_TEST_APP "Registrar no ctest um teste que abre a janela por 5 quadros" OFF)
+  if(VIEWER_TEST_APP AND VIEWER_BUILD_TESTS)
+    add_test(NAME viewer_app_frames COMMAND physics_viewer --frames 5)
+  endif()
   target_link_libraries(physics_viewer PRIVATE viewer_core raylib)
+  # Pasta das cenas salvas/carregadas pela aba "Cenas" (a pasta scenes/ ao lado do código).
+  target_compile_definitions(physics_viewer PRIVATE VIEWER_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
   # SYSTEM: o código do raygui não precisa passar pelos nossos avisos de compilação.
   target_include_directories(physics_viewer SYSTEM PRIVATE ${raygui_SOURCE_DIR}/src)
   if(MSVC)

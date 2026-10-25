@@ -3,7 +3,8 @@
 Janela de demonstração do `../physics_engine` (C++17 + [raylib](https://www.raylib.com/)). Fica numa pasta
 **ao lado** do motor, que continua sem nenhuma dependência gráfica.
 
-> Estado: **V8** (painel "Adicionar objeto"; sobre a V7.1, que corrigiu a legibilidade dos painéis). O roteiro completo
+> Estado: **V12** (salvar e carregar cenas; sobre as cenas de colisão e rotação da V11 e o fechamento da V10). Janela redimensionável, painéis de
+> quatérnio, mundo, objeto e adicionar objetos, eventos de contato, e testes sem janela no `ctest`. O roteiro completo
 > está no `README.md` da pasta acima.
 
 ## Compilar e rodar
@@ -31,6 +32,11 @@ cmake -S physics_viewer -B build_core -DVIEWER_BUILD_APP=OFF
 cmake --build build_core -j && ctest --test-dir build_core
 ```
 
+`ctest` roda dois testes do núcleo, sem janela: `viewer_tests` (verificações unitárias) e `viewer_smoke` (todas as cenas por
+20 s no mesmo caminho da janela, com poses finitas e quatérnios unitários nos 3 modos de interpolação, mais um *fuzz*
+determinístico: centenas de operações aleatórias de criar, lançar, apagar, editar parâmetros, mudar o mundo e trocar de
+cena). Para também registrar a abertura da janela por 5 quadros (precisa de tela/OpenGL): `-DVIEWER_TEST_APP=ON`.
+
 Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `float` só ao desenhar).
 
 ## Controles
@@ -52,10 +58,12 @@ Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `
 | `R` | reiniciar a cena atual (mantém a câmera) |
 | `I` | próximo modo de interpolação (slerp → lerp → Euler) |
 | `Espaço`, `P` ou botão **Pausar/Continuar** | pausar / continuar (selecionar continua funcionando; arrastar só atua com a física rodando) |
+| (ao abrir, trocar ou reiniciar a cena) | **a cena começa pausada**: aperte `Espaço`/**Continuar** para rodar; o `--frames` automático não pausa |
 | `.` ou botão **Passo** | avança **um** passo físico fixo (se estava rodando, pausa primeiro) |
 | botões `1x` `1/2` `1/4` `1/10` | escala de tempo (câmera lenta) |
 | botões `<` `>` e **Reiniciar** | cena anterior / próxima; recriar a cena atual (como `R`) |
 | `M` | mostrar / esconder o painel do mundo (à esquerda, embaixo) |
+| `F11` | tela cheia sem borda (e volta). A janela é redimensionável (mínimo 960 × 700); abaixo de 1320 px de largura os painéis da direita descem para não cobrir a barra de controle |
 | `ESC` | sair |
 
 Verificação automática, sem interação (roda 240 quadros, salva uma captura e sai com código 0):
@@ -77,6 +85,15 @@ Verificação automática, sem interação (roda 240 quadros, salva uma captura 
 | 7 | Formas (poliedros) | tetraedro, octaedro, prisma triangular, pirâmide, caixas e esferas |
 | 8 | Gimbal lock (passo 0,5 s) | gravidade zero; uma caixa gira em torno de X e atravessa pitch = 90° |
 | 9 | Interpolacao (passo 0,35 s) | gravidade zero; um cubo gira ~110° entre dois passos físicos |
+| 10 | Impacto na piramide | a pirâmide da cena 3 (com paredes) e uma bola de 8 kg rolando a 14 m/s contra ela |
+| 11 | Porta giratoria (eixo Y) | porta de 2 m presa a um poste por **dobradiça de eixo Y**; uma bola a atinge na face e ela só gira em torno do eixo |
+| 12 | Gangorra (eixo Z) | prancha de 6 m com dobradiça de eixo Z; uma bola de 4 kg cai numa ponta e a bola leve da outra é lançada |
+| 13 | Pendulo-martelo (eixo Z) | haste de 5 kg presa por dobradiça de eixo Z, solta de 63° contra uma torre de 3 caixas |
+| 14 | Bilhar (esferas) | 10 esferas em triângulo e a bola branca a 14 m/s, com paredes e restituição 0,92 |
+
+As cenas 10 a 14 (V11) são de **colisão e rotação**: nas de eixo fixo (`HingeJoint`), o quatérnio do corpo fica sempre
+no plano `(w, eixo)`: só o componente do eixo muda, e o painel mostra também a velocidade angular **w** do corpo. As teclas
+`1`…`9` vão às nove primeiras; as outras se alcançam com `<` `>` / `←` `→`. Todas começam pausadas: aperte `Espaço`.
 
 Os poliedros são desenhados a partir da `HalfEdgeStructure` do motor (faces em leque de triângulos, com
 tom pela normal no mundo, mais as arestas). As cenas ficam em `src/core/Scene.cpp`; para criar outra,
@@ -105,6 +122,45 @@ Observações:
 - O botão **Restaurar** volta aos valores com que a cena foi criada (as cenas 8 e 9 já têm gravidade zero e passo largo).
 - As cenas 8 e 9 têm Δt de 0,5 s e 0,35 s, abaixo da faixa do slider de frequência (10 Hz); o slider mostra o
   extremo, mas o valor só muda se você o arrastar.
+
+## Salvar e carregar cenas (V12)
+
+Aba **Cenas** do painel da direita (`SceneFile.h`, sem raylib, testado). Os arquivos ficam em `physics_viewer/scenes/`
+(o caminho é fixado na compilação).
+
+- **Salvar cena atual:** grava o **estado de agora** (poses, quatérnios, velocidades, parâmetros dos corpos, objetos que
+  você adicionou ou lançou, juntas, gravidade, Δt, iterações e a câmera inicial) em `<nome>.scene`. O nome digitado vira o
+  nome da cena; símbolos, acentos e barras são removidos do nome do arquivo (`Minha cena 2` → `Minha_cena_2.scene`).
+- **Carregar:** escolha na lista e clique em *Carregar*. A cena entra **pausada**; `R` / **Reiniciar** a recria a partir
+  do arquivo. As teclas `←` `→` voltam às cenas embutidas. O HUD mostra `[arquivo]`.
+- Com o campo do nome em edição, os atalhos de teclado ficam desligados (digite à vontade); `ESC` sai da edição e só um
+  segundo `ESC` fecha o programa.
+- Os arquivos `01…14` da pasta são as cenas embutidas, gravadas por `scene_export` (`scene_export physics_viewer/scenes`),
+  como exemplos para copiar e editar.
+
+Formato (texto, comentários com `#`): cabeçalho `physics_scene 1`, parâmetros do mundo, blocos `body … end` (tipo
+`static|dynamic|kinematic`, forma `box|sphere|poly|none`, massa, posição, **`orientation w x y z`**, velocidades, material,
+cor, `focus`), `joint hinge|ballsocket|distance …` e `link`. Corpos são numerados 1, 2, 3… pela ordem no arquivo. A
+descrição completa está no cabeçalho de `include/viewer/core/SceneFile.h`.
+
+- **Não é salvo:** estado de sono (a cena carrega com todos acordados), contatos e impulsos acumulados (*warm start*).
+  Uma cena recém-criada, salva e recarregada reproduz a mesma trajetória (testado nas 14 cenas).
+- **Arquivo inválido** (número malformado ou NaN/inf, quatérnio nulo, índice de corpo ou de junta fora da faixa, poliedro
+  côncavo, mais de 2000 corpos, mais de 8 MB…): mensagem com o número da linha e a cena atual **não é alterada**.
+
+## Eventos e sleeping (V9)
+
+O viewer escuta os eventos de contato do motor (`IContactListener`, via `ContactTracker.h`, sem raylib, testado):
+
+- **Cor por estado:** corpo **adormecido** (sleeping) fica azulado; acordado, com a cor normal. O chão não muda.
+- **Flash no início do contato:** os dois corpos piscam em branco-amarelado, mais forte quanto maior a velocidade de impacto
+  (`approachSpeed` do motor; 8 m/s ou mais = flash máximo; abaixo de 0,3 m/s é repouso e não pisca). Decai em 0,4 s de tempo
+  **físico** (na câmera lenta dura mais; pausado, congela).
+- **Anéis** no ponto do impacto (até 32 ao mesmo tempo).
+- Aba **Evento** do painel do mundo: liga/desliga cada efeito; mostra contatos agora, corpos dormindo, nº de inícios e fins de
+  contato, último e maior impacto (m/s); **Zerar contadores**.
+- Dica: na cena Pilha, deixe rodar uns segundos (os blocos adormecem e ficam azuis); dê um empurrão (arraste um bloco) e eles
+  acordam. Contatos de repouso contam como início, mas não piscam.
 
 ## Adicionar objetos (V8)
 
@@ -203,10 +259,13 @@ desenha os eixos locais do corpo (X vermelho, Y verde, Z azul).
 ```text
 physics_viewer/
 ├── CMakeLists.txt
-├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
+├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, ContactTracker, SceneFile, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
 ├── src/core/
 ├── src/app/main.cpp       a janela (única parte que usa raylib)
-└── tests/viewer_tests.cpp testes do núcleo, sem janela
+├── tools/scene_export.cpp  grava as cenas embutidas como .scene (sem raylib)
+├── scenes/                exemplos e cenas salvas (.scene)
+├── tests/viewer_tests.cpp testes unitários do núcleo, sem janela
+└── tests/viewer_smoke.cpp fumaça: todas as cenas + fuzz, sem janela
 ```
 
 A lógica fica fora da janela de propósito: cenas, câmera e matemática são testadas sem tela, e a camada
@@ -214,7 +273,7 @@ raylib é fina.
 
 ## O que foi verificado
 
-- Núcleo e testes (503 verificações: matemática, câmera, as 9 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
+- Núcleo e testes (1336 verificações em `viewer_tests`, mais 467 em `viewer_smoke` (o fuzz também salva e recarrega a cena no meio); `SceneFile`: ida e volta das 14 cenas (texto idêntico e trajetória igual), arquivo em disco, 22 entradas inválidas com a mensagem esperada, limites e CRLF/comentários; as cenas da V11: bola que desmonta a pirâmide, porta que só gira em Y com o centro a 1 m do eixo, gangorra só em Z, martelo que derruba a torre, bilhar sem ganho de energia: matemática, câmera, as 14 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `ContactTracker`: intensidade por velocidade, tinta por estado, flash que decai, marcadores limitados, contadores, eventos reais do motor (caixa que cai) e a pilha adormecendo; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
 - `main.cpp`: passa na verificação de tipos contra os cabeçalhos da raylib 5.5 e do raygui 4.0, sem warnings, em `float` e
   `double`. A convenção de matriz foi conferida no código-fonte da raylib (campo `mN` = elemento `N` do
   array passado a `rlMultMatrixf`).
@@ -222,7 +281,12 @@ raylib é fina.
   painéis é escuro (os painéis do raygui são claros) e o texto direto sobre a cena ganha uma faixa escura
   translúcida. **Não verificado por mim:** o ajuste fino dos tamanhos depois da V7.1 (não consigo abrir a janela
   no ambiente de desenvolvimento, sem X11/OpenGL); as larguras foram calculadas a partir das capturas.
-  Na V8, confira: se o painel Adicionar cabe (344 px de altura) e nenhum texto é cortado, se as duas fileiras de tipos
+  Na V12, confira: a aba Cenas cabe no painel (campo, botões, lista de 104 px, mensagem), digitar o nome não aciona
+  atalhos, Salvar cria o arquivo em `physics_viewer/scenes/` e Carregar traz a cena de volta pausada.
+  Na V10, confira: se a janela redimensiona sem sobrepor painéis (mínimo 960 × 700) e se F11 entra e sai da tela cheia.
+  Na V9, confira: se a aba "Evento" cabe no painel (5 abas) e se o flash/anéis aparecem ao soltar uma caixa; os blocos
+  da Pilha ficam azuis ao dormir e voltam à cor ao acordar.
+  Na V8, confira: se o painel Adicionar cabe (344 px de altura; a aba Objeto tem 306 px) e nenhum texto é cortado, se as duas fileiras de tipos
   mudam a forma, se a prévia amarela acompanha o mouse e se o clique cria o objeto no ponto certo.
   Confira na V7.1: se todo texto dos painéis é legível, se cada slider mostra seu número à direita, se nenhum
   rótulo é cortado pela barra do slider e se o texto de baixo (FPS e atalhos) aparece sobre a faixa escura.

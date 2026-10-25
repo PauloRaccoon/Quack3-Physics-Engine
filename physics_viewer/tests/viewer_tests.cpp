@@ -15,10 +15,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <limits>
 #include <string>
 
 #include "viewer/core/BodyEditor.h"
+#include "viewer/core/ContactTracker.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
@@ -26,6 +28,7 @@
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
 #include "viewer/core/Scene.h"
+#include "viewer/core/SceneFile.h"
 #include "viewer/core/ViewerMath.h"
 
 using namespace viewer;
@@ -202,7 +205,8 @@ static void testFallingBoxScene() {
 static void testSceneRegistry() {
     using namespace physics;
     const std::vector<SceneInfo>& list = sceneList();
-    CHECK(list.size() == 9);
+    CHECK(list.size() == 14);   // 9 originais + 5 da V11 (anexadas: teclas 1-9 não mudam)
+    CHECK(list[2].name == std::string("Piramide de caixas"));
     CHECK(makeScene(9999).name == list.back().make().name);   // índice fora do intervalo é limitado
 
     for (std::size_t i = 0; i < list.size(); ++i) {
@@ -1028,6 +1032,316 @@ static void testObjectSpawner() {
     CHECK(finite);
 }
 
+static void testContactTracker() {
+    using namespace physics;
+    // Intensidade e tinta.
+    CHECK(ContactTracker::intensityFromSpeed(0.1f) == 0.0f);
+    CHECK(near(ContactTracker::intensityFromSpeed(4.0f), 0.5f));
+    CHECK(near(ContactTracker::intensityFromSpeed(100.0f), 1.0f));
+    CHECK(ContactTracker::intensityFromSpeed(std::numeric_limits<float>::quiet_NaN()) == 0.0f);
+    const Rgb base{200, 100, 50};
+    const Rgb same = stateTint(base, false, 0.0f);
+    CHECK(same.r == 200 && same.g == 100 && same.b == 50);
+    const Rgb sl = stateTint(base, true, 0.0f);
+    CHECK(sl.b > base.b && sl.r < base.r);                       // adormecido: mais azul, menos vermelho
+    const Rgb fl = stateTint(base, false, 1.0f);
+    CHECK(fl.r > base.r && fl.g > base.g && fl.b > base.b);      // flash: mais claro
+    const Rgb nanT = stateTint(base, false, std::numeric_limits<float>::quiet_NaN());
+    CHECK(nanT.r == 200);
+
+    // Eventos sinteticos.
+    ContactTracker t;
+    ContactEvent e;
+    e.a = 1; e.b = 2; e.point = Vector3(1, 0, 0);
+    e.approachSpeed = Real(0.1);
+    t.onContactBegin(e);
+    CHECK(t.begins() == 1 && t.flashOf(1) == 0.0f && t.markers().empty());   // repouso: conta, sem flash
+    e.approachSpeed = Real(8);
+    t.onContactBegin(e);
+    CHECK(t.begins() == 2 && near(t.flashOf(1), 1.0f) && near(t.flashOf(2), 1.0f) && t.markers().size() == 1);
+    CHECK(near(t.maxImpact(), 8.0f) && near(t.lastImpact(), 8.0f) && t.flashOf(3) == 0.0f);
+    t.onContactEnd(e);
+    CHECK(t.ends() == 1);
+    t.update(0.2f);
+    CHECK(t.flashOf(1) > 0.4f && t.flashOf(1) < 0.6f);
+    t.update(std::numeric_limits<float>::quiet_NaN());
+    t.update(-1.0f);
+    CHECK(t.flashOf(1) > 0.4f && t.flashOf(1) < 0.6f);          // dt invalido: nada muda
+    t.update(1.0f);
+    CHECK(t.flashOf(1) == 0.0f && t.markers().empty());
+    for (int i = 0; i < 100; ++i) t.onContactBegin(e);
+    CHECK(t.markers().size() == ContactTracker::kMaxMarkers);
+    t.reset();
+    CHECK(t.begins() == 0 && t.markers().empty() && t.maxImpact() == 0.0f);
+
+    // Com o motor: a caixa que cai bate no chao -> inicio de contato com impacto > 0.
+    Scene sc = makeFallingBoxScene();
+    ContactTracker tr;
+    sc.world->setContactListener(&tr);
+    for (int i = 0; i < 300; ++i) sc.world->step();
+    CHECK(tr.begins() >= 1);
+    CHECK(tr.maxImpact() > 1.0f);
+    sc.world->setContactListener(nullptr);
+
+    // Sleeping: a pilha em repouso adormece (cor azulada no viewer).
+    Scene st = makeStackScene();
+    for (int i = 0; i < 900; ++i) st.world->step();
+    int sleeping = 0;
+    for (const SceneBody& b : st.bodies)
+        if (!b.isStatic && !st.world->isAwake(b.id)) ++sleeping;
+    CHECK(sleeping >= 1);
+    st.world->setContactListener(nullptr);
+}
+
+static physics::Real angleAbout(const physics::Quaternion& q, const physics::Vector3& axisUnit) {
+    // Ângulo [rad] da rotação q em torno de um eixo fixo (componente do vetor do quatérnio nesse eixo).
+    const physics::Real s = q.x * axisUnit.x + q.y * axisUnit.y + q.z * axisUnit.z;
+    return physics::Real(2) * std::atan2(s, q.w);
+}
+
+static void testSceneFile() {
+    using namespace physics;
+    // Ida e volta de TODAS as cenas.
+    for (std::size_t i = 0; i < sceneList().size(); ++i) {
+        // (1) Cena recém-criada: o arquivo recria o MESMO mundo, então as trajetórias coincidem.
+        {
+            Scene a = makeScene(i);
+            Scene b;
+            std::string err;
+            const bool ok = parseScene(serializeScene(a), b, err);
+            if (!ok) std::printf("  erro cena %zu: %s\n", i + 1, err.c_str());
+            CHECK(ok);
+            if (ok) {
+                Real maxDiff = 0;
+                for (int k = 0; k < 180; ++k) {
+                    a.world->step();
+                    b.world->step();
+                }
+                for (std::size_t k = 0; k < a.bodies.size(); ++k)
+                    maxDiff = std::max(maxDiff, (a.world->getBody(a.bodies[k].id).getTransform().position -
+                                                 b.world->getBody(b.bodies[k].id).getTransform().position).length());
+                if (maxDiff >= Real(0.01)) std::printf("  cena %zu: diferenca %.4f\n", i + 1, double(maxDiff));
+                CHECK(maxDiff < Real(0.01));
+            }
+        }
+        // (2) Cena em andamento (velocidades, contatos): o texto sobrevive à ida e volta, e a cena carregada é válida.
+        Scene a = makeScene(i);
+        for (int k = 0; k < 20; ++k) a.world->step();
+        const std::string text = serializeScene(a);
+        Scene b;
+        std::string err;
+        const bool ok = parseScene(text, b, err);
+        CHECK(ok);
+        if (!ok) continue;
+        CHECK(serializeScene(b) == text);
+        CHECK(b.bodies.size() == a.bodies.size() && b.links.size() == a.links.size());
+        CHECK(b.name == a.name);
+        CHECK(near(b.cameraTarget, a.cameraTarget) && near(b.cameraDistance, a.cameraDistance));
+        CHECK((b.focus == kInvalidBodyId) == (a.focus == kInvalidBodyId));
+        int jointsA = 0, jointsB = 0;
+        a.world->forEachJoint([&](const JointConstraint&, BodyId, BodyId) { ++jointsA; });
+        b.world->forEachJoint([&](const JointConstraint&, BodyId, BodyId) { ++jointsB; });
+        CHECK(jointsA == jointsB);
+        for (int k = 0; k < 120; ++k) b.world->step();   // a cena carregada roda sem NaN
+        bool finite = true;
+        for (const SceneBody& sb : b.bodies) finite = finite && b.world->getBody(sb.id).getTransform().position.isFinite();
+        CHECK(finite);
+        for (std::size_t k = 0; k < a.bodies.size(); ++k)   // cores, tipo e forma preservados
+            CHECK(a.bodies[k].r == b.bodies[k].r && a.bodies[k].isStatic == b.bodies[k].isStatic && a.bodies[k].kind == b.bodies[k].kind);
+    }
+
+    // Quaternio e velocidades exatos na volta (corpo qualquer).
+    {
+        Scene a = makeFallingBoxScene();
+        for (int k = 0; k < 37; ++k) a.world->step();
+        Scene b;
+        std::string err;
+        CHECK(parseScene(serializeScene(a), b, err));
+        const RigidBody& ra = a.world->getBody(a.focus);
+        const RigidBody& rb = b.world->getBody(b.focus);
+        CHECK(ra.getOrientation().w == rb.getOrientation().w && ra.getOrientation().z == rb.getOrientation().z);
+        CHECK(ra.getAngularVelocity().y == rb.getAngularVelocity().y);
+        CHECK(ra.getTransform().position.y == rb.getTransform().position.y);
+    }
+
+    // Arquivo de verdade em disco.
+    {
+        Scene a = makeDoorScene();
+        const std::string dir = "viewer_smoke_scenes_tmp";
+        std::string err;
+        CHECK(saveSceneFile(a, dir + "/porta_teste.scene", err));
+        CHECK(saveSceneFile(a, dir + "/a_outra.scene", err));
+        const std::vector<std::string> names = listSceneFiles(dir);
+        CHECK(names.size() == 2 && names[0] == "a_outra" && names[1] == "porta_teste");
+        Scene b;
+        CHECK(loadSceneFile(dir + "/porta_teste.scene", b, err));
+        CHECK(b.bodies.size() == a.bodies.size());
+        CHECK(!loadSceneFile(dir + "/nao_existe.scene", b, err) && !err.empty());
+        CHECK(listSceneFiles("pasta_que_nao_existe_xyz").empty());
+        std::filesystem::remove_all(dir);
+    }
+
+    // Nome de arquivo seguro.
+    CHECK(sanitizeSceneFileName("Minha cena 2") == "Minha_cena_2");
+    CHECK(sanitizeSceneFileName("../../etc/passwd") == "etcpasswd");
+    CHECK(sanitizeSceneFileName("") == "cena");
+    CHECK(sanitizeSceneFileName("///") == "cena");
+    CHECK(sanitizeSceneFileName(std::string(200, 'a')).size() == 48);
+
+    // Entradas inválidas: erro com mensagem, destino intacto.
+    const std::string good =
+        "physics_scene 1\nname Teste\nbody\n type dynamic\n shape box 0.5 0.5 0.5\n mass 1\n position 0 2 0\nend\n";
+    {
+        Scene t;
+        std::string err;
+        CHECK(parseScene(good, t, err) && t.bodies.size() == 1 && t.name == "Teste");
+    }
+    struct Bad { const char* what; std::string text; const char* expect; };
+    auto withLine = [&](const std::string& extra) {   // insere uma linha dentro do corpo
+        std::string t = good;
+        t.insert(t.find("end\n"), extra);
+        return t;
+    };
+    const Bad bads[] = {
+        {"vazio", "", "vazio"},
+        {"sem cabecalho", "body\nend\n", "physics_scene"},
+        {"versao", "physics_scene 7\n", "versao"},
+        {"sem corpos", "physics_scene 1\nname x\n", "nenhum corpo"},
+        {"comando", "physics_scene 1\nxyz 1\n", "desconhecido"},
+        {"body sem end", "physics_scene 1\nbody\n type static\n", "sem 'end'"},
+        {"numero", withLine(" velocity 1 abc 0\n"), "numero invalido"},
+        {"nan", withLine(" velocity 1 nan 0\n"), "numero invalido"},
+        {"inf", withLine(" velocity 1 inf 0\n"), "numero invalido"},
+        {"quaternio zero", withLine(" orientation 0 0 0 0\n"), "norma zero"},
+        {"massa negativa", withLine(" mass -3\n"), "massa"},
+        {"valores a mais", withLine(" velocity 1 2 3 4\n"), "espera"},
+        {"chave", withLine(" cor 1 2 3\n"), "chave desconhecida"},
+        {"restituicao", withLine(" material 0.5 7\n"), "restituicao"},
+        {"sem shape", "physics_scene 1\nbody\n type static\nend\n", "sem 'shape'"},
+        {"dinamico sem massa", "physics_scene 1\nbody\n type dynamic\n shape sphere 1\nend\n", "mass"},
+        {"junta fora", good + "joint ballsocket 1 5 0 0 0 0\n", "nao existe"},
+        {"junta em si", good + "joint ballsocket 1 1 0 0 0 0\n", "ele mesmo"},
+        {"eixo nulo", "physics_scene 1\nbody\n type static\n shape box 1 1 1\nend\nbody\n type dynamic\n shape box 1 1 1\n mass 1\nend\n"
+                      "joint hinge 1 2 0 0 0 0 0 0 0\n", "junta invalida"},
+        {"poliedro concavo",
+         "physics_scene 1\nbody\n type dynamic\n shape poly\n mass 1\n vertex 0 0 0\n vertex 1 0 0\n vertex 0 1 0\n vertex 0 0 1\n"
+         " vertex 0.1 0.1 0.1\n face 0 1 2\n face 0 1 3\n face 0 2 3\n face 1 2 4\nend\n", "linha"},
+        {"face com indice", "physics_scene 1\nbody\n type dynamic\n shape poly\n mass 1\n vertex 0 0 0\n vertex 1 0 0\n vertex 0 1 0\n vertex 0 0 1\n"
+                            " face 0 1 2\n face 0 1 3\n face 0 2 3\n face 1 2 9\nend\n", "nao existe"},
+        {"dois focus", good + "body\n type static\n shape box 1 1 1\n focus\nend\n" , "mais de um"},
+        {"timestep", "physics_scene 1\ntimestep 50\n", "timestep"},
+    };
+    for (const Bad& bd : bads) {
+        Scene t = makeFallingBoxScene();
+        const std::size_t before = t.bodies.size();
+        std::string err;
+        std::string text = bd.text;
+        if (std::string(bd.what) == "dois focus") text.insert(text.find("end\n"), " focus\n");
+        const bool ok = parseScene(text, t, err);
+        const bool matches = err.find(bd.expect) != std::string::npos;
+        if (ok || !matches) std::printf("  caso '%s': ok=%d erro='%s'\n", bd.what, ok ? 1 : 0, err.c_str());
+        CHECK(!ok);
+        CHECK(matches);
+        CHECK(t.bodies.size() == before && t.world != nullptr);   // destino intacto
+    }
+    {   // limites: corpos demais e arquivo grande
+        std::string many = "physics_scene 1\n";
+        for (int i = 0; i < scenefile::kMaxBodies + 1; ++i) many += "body\n type static\n shape box 1 1 1\nend\n";
+        Scene t;
+        std::string err;
+        CHECK(!parseScene(many, t, err) && err.find("corpos demais") != std::string::npos);
+        const std::string big(scenefile::kMaxBytes + 1, ' ');
+        CHECK(!parseScene(big, t, err) && err.find("grande demais") != std::string::npos);
+    }
+    {   // comentários, CRLF, linhas em branco e nome com '#'
+        std::string t = "physics_scene 1  # versao\r\n\r\nname Cena #1 com hash\r\n# comentario\r\nbody\r\n type static # chao\r\n shape box 5 0.5 5\r\nend\r\n";
+        Scene s;
+        std::string err;
+        CHECK(parseScene(t, s, err) && s.name == "Cena #1 com hash" && s.bodies.size() == 1 && s.bodies[0].isStatic);
+    }
+}
+
+static void testCollisionScenes() {
+    using namespace physics;
+    auto run = [](Scene& s, double seconds) { for (int i = 0; i < static_cast<int>(seconds * 60.0); ++i) s.world->step(); };
+    auto displaced = [](const Scene& s, const std::vector<Vector3>& before, Real dist) {
+        int n = 0;
+        for (std::size_t i = 0; i < s.bodies.size(); ++i)
+            if (!s.bodies[i].isStatic && (s.world->getBody(s.bodies[i].id).getTransform().position - before[i]).length() > dist) ++n;
+        return n;
+    };
+    auto snapshot = [](const Scene& s) {
+        std::vector<Vector3> v;
+        for (const SceneBody& b : s.bodies) v.push_back(s.world->getBody(b.id).getTransform().position);
+        return v;
+    };
+
+    {   // Impacto: a bola chega com v ~ 14 m/s e desmonta a pirâmide.
+        Scene s = makePyramidImpactScene();
+        CHECK(s.world->getBody(s.focus).getLinearVelocity().x > Real(13.9));
+        const std::vector<Vector3> b0 = snapshot(s);
+        run(s, 6);
+        CHECK(displaced(s, b0, Real(0.7)) >= 8);   // a maioria dos 15 blocos saiu do lugar
+    }
+    {   // Porta: gira SÓ em torno de Y (a dobradiça), e a bola a faz girar.
+        Scene s = makeDoorScene();
+        const BodyId door = s.focus;
+        Real maxAngle = 0, maxOff = 0;
+        for (int i = 0; i < 360; ++i) {
+            s.world->step();
+            const Quaternion q = s.world->getBody(door).getOrientation();
+            maxAngle = std::max(maxAngle, std::fabs(angleAbout(q, Vector3(0, 1, 0))));
+            maxOff = std::max(maxOff, std::max(std::fabs(q.x), std::fabs(q.z)));
+            // O centro da porta fica a 1 m da dobradiça (anel de raio 1 em torno do eixo Y).
+            const Vector3 c = s.world->getBody(door).getTransform().position;
+            CHECK(std::fabs(std::sqrt(c.x * c.x + c.z * c.z) - Real(1)) < Real(0.02) && std::fabs(c.y - Real(1.3)) < Real(0.02));
+        }
+        CHECK(maxAngle > Real(1));      // girou mais de 1 rad
+        CHECK(maxOff < Real(0.02));     // nenhuma rotação fora do eixo Y
+    }
+    {   // Gangorra: a ponta atingida desce, a prancha gira só em torno de Z.
+        Scene s = makeSeesawScene();
+        const BodyId plank = s.focus;
+        run(s, 4);
+        const Quaternion q = s.world->getBody(plank).getOrientation();
+        CHECK(std::fabs(angleAbout(q, Vector3(0, 0, 1))) > Real(0.1));
+        CHECK(std::fabs(q.x) < Real(0.02) && std::fabs(q.y) < Real(0.02));
+        CHECK(angleAbout(q, Vector3(0, 0, 1)) > Real(0));   // anti-horário em Z: a ponta direita sobe, a esquerda (onde a bola caiu) desce
+    }
+    {   // Martelo: oscila em Z e derruba a torre.
+        Scene s = makeHammerScene();
+        const std::vector<Vector3> b0 = snapshot(s);
+        const BodyId hammer = s.focus;
+        Real maxOff = 0;
+        for (int i = 0; i < 600; ++i) {
+            s.world->step();
+            const Quaternion q = s.world->getBody(hammer).getOrientation();
+            maxOff = std::max(maxOff, std::max(std::fabs(q.x), std::fabs(q.y)));
+        }
+        CHECK(maxOff < Real(0.02));
+        int moved = 0;
+        for (std::size_t i = 0; i < s.bodies.size(); ++i)
+            if (!s.bodies[i].isStatic && s.bodies[i].id != hammer &&
+                (s.world->getBody(s.bodies[i].id).getTransform().position - b0[i]).length() > Real(0.5)) ++moved;
+        CHECK(moved >= 1);
+    }
+    {   // Bilhar: a bola branca espalha o triângulo; ninguém sai da mesa; energia nunca cresce.
+        Scene s = makeBilliardsScene();
+        const std::vector<Vector3> b0 = snapshot(s);
+        auto energy = [&]() {
+            Real e = 0;
+            for (const SceneBody& b : s.bodies) if (!b.isStatic) e += s.world->getBody(b.id).getKineticEnergy();
+            return e;
+        };
+        const Real e0 = energy();
+        run(s, 3);
+        CHECK(displaced(s, b0, Real(0.5)) >= 6);
+        CHECK(energy() <= e0 * Real(1.001));
+        for (const SceneBody& b : s.bodies)
+            CHECK(s.world->getBody(b.id).getTransform().position.y > Real(-1));
+    }
+}
+
 int main() {
     testMatchesEngine();
     testKnownRotation();
@@ -1042,6 +1356,9 @@ int main() {
     testWorldEditor();
     testTimeControl();
     testObjectSpawner();
+    testContactTracker();
+    testCollisionScenes();
+    testSceneFile();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

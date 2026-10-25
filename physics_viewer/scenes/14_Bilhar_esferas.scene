@@ -1,0 +1,230 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name Bilhar (esferas)
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 0 0.5 0 14
+body
+  type static
+  shape box 10 0.5 10
+  position 0 -0.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 120 130 140
+end
+body
+  type static
+  shape box 10 1 0.25
+  position 0 1 9.75
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 10 1 0.25
+  position 0 1 -9.75
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 0.25 1 10
+  position 9.75 1 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type static
+  shape box 0.25 1 10
+  position -9.75 1 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 90 100 112
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 2 0.3 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 2.52 0.3 -0.31
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 2.52 0.3 0.31
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.04 0.3 -0.62
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.04 0.3 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.04 0.3 0.62
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 220 100
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.56 0.3 -0.93
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 100 220 210
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.56 0.3 -0.31
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 220 130 220
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.56 0.3 0.31
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position 3.56 0.3 0.93
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape sphere 0.3
+  mass 0.5
+  position -6 0.3 0.12
+  orientation 1 0 0 0
+  velocity 14 0 0
+  angular_velocity 0 0 0
+  material 0.1 0.92
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 245 245 245
+  focus
+end

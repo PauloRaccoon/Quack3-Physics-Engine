@@ -75,5 +75,11 @@ Scene makeChainScene();        ///< corrente de caixas (juntas bola-soquete)
 Scene makeGimbalScene();       ///< gravidade zero, passo largo; gira através de pitch = 90° (gimbal lock)
 Scene makeWideStepScene();     ///< gravidade zero, passo de 0,35 s: interpolação de render bem visível
 Scene makeShapesScene();       ///< caixa, esfera e poliedros (tetraedro, octaedro, prisma, pirâmide)
+// V11 — colisão e rotação
+Scene makePyramidImpactScene();   ///< a pirâmide da cena 3 + bola pesada rolando a 14 m/s contra ela
+Scene makeDoorScene();            ///< porta presa por dobradiça de eixo Y; bola a atinge na face
+Scene makeSeesawScene();          ///< gangorra: prancha com dobradiça de eixo Z; bola pesada cai numa ponta
+Scene makeHammerScene();          ///< haste com dobradiça de eixo Z, solta de 63 graus, contra uma torre
+Scene makeBilliardsScene();       ///< 10 esferas em triângulo e a bola branca a 14 m/s
 
 } // namespace viewer

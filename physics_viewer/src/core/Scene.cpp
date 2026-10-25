@@ -64,13 +64,16 @@ void addGround(Scene& s) {
 }
 
 SceneBody& addBox(Scene& s, const Vector3& pos, const Vector3& half, Real mass, Rgb c,
-                  const Quaternion& q = Quaternion()) {
+                  const Quaternion& q = Quaternion(), const Vector3& vel = Vector3(), Real restitution = Real(-1),
+                  Real angularDamping = Real(0)) {
     RigidBodyDesc d;
     d.shape = std::make_shared<BoxShape>(half);
     d.mass = mass;
     d.transform = Transform(pos, q);
+    d.linearVelocity = vel;
     d.friction = Real(0.5);
-    d.angularDamping = Real(0);
+    if (restitution >= Real(0)) d.restitution = restitution;
+    d.angularDamping = angularDamping;
 
     SceneBody b;
     b.id = s.world->createBody(d);
@@ -81,12 +84,16 @@ SceneBody& addBox(Scene& s, const Vector3& pos, const Vector3& half, Real mass, 
     return s.bodies.back();
 }
 
-SceneBody& addSphere(Scene& s, const Vector3& pos, Real radius, Real mass, Rgb c) {
+SceneBody& addSphere(Scene& s, const Vector3& pos, Real radius, Real mass, Rgb c, const Vector3& vel = Vector3(),
+                     const Vector3& angVel = Vector3(), Real restitution = Real(-1), Real friction = Real(0.5)) {
     RigidBodyDesc d;
     d.shape = std::make_shared<SphereShape>(radius);
     d.mass = mass;
     d.transform = Transform(pos);
-    d.friction = Real(0.5);
+    d.linearVelocity = vel;
+    d.angularVelocity = angVel;
+    d.friction = friction;
+    if (restitution >= Real(0)) d.restitution = restitution;
     d.angularDamping = Real(0);
 
     SceneBody b;
@@ -373,6 +380,127 @@ Scene makeWideStepScene() {
 // =============================================================================
 // Registro
 // =============================================================================
+// -----------------------------------------------------------------------------
+// V11 — cenas de colisão e rotação
+// -----------------------------------------------------------------------------
+Scene makePyramidImpactScene() {
+    Scene s = makePyramidScene();   // a mesma pirâmide da cena 3...
+    s.name = "Impacto na piramide";
+    addWalls(s);   // os blocos voam longe: sem paredes eles cairiam da borda do chão (20 x 20 m)
+    // ...e uma bola pesada (8 kg, raio 0,6) rolando a 14 m/s contra ela. w = v / r, rolando sem deslizar.
+    const Real r = Real(0.6), v = Real(14);
+    s.focus = addSphere(s, Vector3(-9, r, 0), r, Real(8), Rgb{235, 235, 240}, Vector3(v, 0, 0), Vector3(0, 0, -v / r), Real(0.3)).id;
+    s.cameraTarget = Vec3f{-2.0f, 1.5f, 0.0f};
+    s.cameraDistance = 15.0f;
+    return s;
+}
+
+Scene makeDoorScene() {
+    Scene s;
+    s.name = "Porta giratoria (eixo Y)";
+    s.world = std::make_unique<PhysicsWorld>();
+    addGround(s);
+    // Batente: poste estático em x = 0. Porta de 2 m presa a ele por uma dobradiça de eixo Y (vertical).
+    const Vector3 hinge(0, Real(1.3), 0);
+    RigidBodyDesc pd;
+    pd.type = BodyType::Static;
+    pd.shape = std::make_shared<BoxShape>(Vector3(Real(0.08), Real(1.3), Real(0.08)));
+    pd.transform = Transform(Vector3(Real(-0.1), Real(1.3), 0));
+    SceneBody post;
+    post.id = s.world->createBody(pd);
+    post.kind = ShapeKind::Box;
+    post.halfExtents = Vec3f{0.08f, 1.3f, 0.08f};
+    post.isStatic = true;
+    post.r = 90; post.g = 100; post.b = 112;
+    s.bodies.push_back(post);
+    const SceneBody door = addBox(s, Vector3(1, Real(1.3), 0), Vector3(1, Real(1.2), Real(0.08)), Real(4), paletteColor(2),
+                                  Quaternion(), Vector3(), Real(-1), Real(0.3));
+    s.world->createHingeJoint(post.id, door.id, hinge, Vector3(0, 1, 0));
+    s.links.push_back({post.id, door.id});
+    // Bola de 2 kg vindo de +z a 9 m/s: atinge a face da porta a 1,6 m da dobradiça e a faz girar em torno de Y.
+    addSphere(s, Vector3(Real(1.6), Real(0.9), 6), Real(0.35), Real(2), paletteColor(0), Vector3(0, 0, -9), Vector3(), Real(0.2));
+    s.focus = door.id;
+    s.cameraTarget = Vec3f{1.0f, 1.2f, 0.0f};
+    s.cameraDistance = 9.0f;
+    return s;
+}
+
+Scene makeSeesawScene() {
+    Scene s;
+    s.name = "Gangorra (eixo Z)";
+    s.world = std::make_unique<PhysicsWorld>();
+    addGround(s);
+    const Vector3 pivot(0, Real(0.9), 0);
+    RigidBodyDesc fd;
+    fd.type = BodyType::Static;
+    fd.shape = std::make_shared<BoxShape>(Vector3(Real(0.2), Real(0.4), Real(0.6)));
+    fd.transform = Transform(Vector3(0, Real(0.4), 0));
+    SceneBody base;
+    base.id = s.world->createBody(fd);
+    base.kind = ShapeKind::Box;
+    base.halfExtents = Vec3f{0.2f, 0.4f, 0.6f};
+    base.isStatic = true;
+    base.r = 90; base.g = 100; base.b = 112;
+    s.bodies.push_back(base);
+    // Prancha de 6 m (3 kg) com dobradiça de eixo Z no meio. Uma bola leve numa ponta, uma pesada cai na outra.
+    const SceneBody plank = addBox(s, pivot, Vector3(3, Real(0.1), Real(0.6)), Real(3), paletteColor(4),
+                                   Quaternion(), Vector3(), Real(-1), Real(0.2));
+    s.world->createHingeJoint(base.id, plank.id, pivot, Vector3(0, 0, 1));
+    s.links.push_back({base.id, plank.id});
+    addSphere(s, Vector3(Real(2.5), Real(1.3), 0), Real(0.3), Real(0.5), paletteColor(1), Vector3(), Vector3(), Real(0.2));
+    addSphere(s, Vector3(Real(-2.4), 4, 0), Real(0.4), Real(4), paletteColor(0), Vector3(), Vector3(), Real(0.1));
+    s.focus = plank.id;
+    s.cameraTarget = Vec3f{0.0f, 1.5f, 0.0f};
+    s.cameraDistance = 11.0f;
+    return s;
+}
+
+Scene makeHammerScene() {
+    Scene s;
+    s.name = "Pendulo-martelo (eixo Z)";
+    s.world = std::make_unique<PhysicsWorld>();
+    addGround(s);
+    // Haste de 3 m (5 kg) presa por dobradiça de eixo Z em (0, 3,2, 0); solta de 63 graus à esquerda.
+    const Vector3 pivot(0, Real(3.2), 0);
+    const BodyId anchor = addAnchor(s, pivot);
+    const Real theta = Real(-1.1), len = Real(1.5);   // meio-comprimento da haste
+    const Quaternion q = Quaternion::fromAxisAngle(Vector3(0, 0, 1), theta);
+    const Vector3 center = pivot + Vector3(len * std::sin(theta), -len * std::cos(theta), 0);
+    const SceneBody hammer = addBox(s, center, Vector3(Real(0.12), len, Real(0.12)), Real(5), paletteColor(3), q,
+                                    Vector3(), Real(-1), Real(0));
+    s.world->createHingeJoint(anchor, hammer.id, pivot, Vector3(0, 0, 1));
+    s.links.push_back({anchor, hammer.id});
+    // Torre de 3 caixas leves no caminho do martelo.
+    for (int i = 0; i < 3; ++i)
+        addBox(s, Vector3(Real(0.6), Real(0.4) + Real(i) * Real(0.801), 0), Vector3(Real(0.4), Real(0.4), Real(0.4)), Real(0.8),
+               paletteColor(i + 5));
+    s.focus = hammer.id;
+    s.cameraTarget = Vec3f{0.0f, 1.8f, 0.0f};
+    s.cameraDistance = 10.0f;
+    return s;
+}
+
+Scene makeBilliardsScene() {
+    Scene s;
+    s.name = "Bilhar (esferas)";
+    s.world = std::make_unique<PhysicsWorld>();
+    addGround(s);
+    addWalls(s);
+    const Real r = Real(0.3);
+    // Triângulo de 10 esferas (4 fileiras) e a bola branca a 14 m/s, levemente fora do centro.
+    int color = 0;
+    for (int row = 0; row < 4; ++row)
+        for (int i = 0; i <= row; ++i)
+            addSphere(s, Vector3(Real(2) + Real(row) * Real(0.52), r, (Real(i) - Real(row) * Real(0.5)) * Real(0.62)), r,
+                      Real(0.5), paletteColor(color++), Vector3(), Vector3(), Real(0.92), Real(0.1));
+    const SceneBody cue = addSphere(s, Vector3(-6, r, Real(0.12)), r, Real(0.5), Rgb{245, 245, 245}, Vector3(14, 0, 0),
+                                    Vector3(), Real(0.92), Real(0.1));
+    s.focus = cue.id;
+    s.cameraTarget = Vec3f{0.0f, 0.5f, 0.0f};
+    s.cameraDistance = 14.0f;
+    return s;
+}
+
 const std::vector<SceneInfo>& sceneList() {
     static const std::vector<SceneInfo> list = {
         {"Caixa em queda", &makeFallingBoxScene},
@@ -384,6 +512,11 @@ const std::vector<SceneInfo>& sceneList() {
         {"Formas (poliedros)", &makeShapesScene},
         {"Gimbal lock (passo 0,5 s)", &makeGimbalScene},
         {"Interpolacao (passo 0,35 s)", &makeWideStepScene},
+        {"Impacto na piramide", &makePyramidImpactScene},
+        {"Porta giratoria (eixo Y)", &makeDoorScene},
+        {"Gangorra (eixo Z)", &makeSeesawScene},
+        {"Pendulo-martelo (eixo Z)", &makeHammerScene},
+        {"Bilhar (esferas)", &makeBilliardsScene},
     };
     return list;
 }

@@ -41,12 +41,25 @@
 // "posicionar com clique" cria onde o mouse aponta (com prévia em fio); "Lancar da camera" dispara o objeto
 // na direção para onde a câmera olha. A criação passa por viewer/core/ObjectSpawner.h.
 //
+// V9 — eventos e sleeping: o viewer escuta os eventos de contato do motor (IContactListener). Corpos
+// adormecidos ficam azulados; no INÍCIO de um contato o corpo pisca em branco-amarelado, mais forte quanto
+// maior a velocidade de impacto (8 m/s = máximo), com um anel no ponto do impacto. A aba "Evento" do painel
+// do mundo liga/desliga cada efeito e mostra contadores. Lógica em viewer/core/ContactTracker.h.
+//
+// V12 — salvar e carregar cenas: aba "Cenas" do painel da direita. Digite um nome, "Salvar" grava o ESTADO ATUAL
+// (poses, velocidades, objetos adicionados, parâmetros do mundo) em scenes/<nome>.scene; a lista mostra os
+// arquivos da pasta e "Carregar" substitui a cena (começa pausada; R reinicia a partir do arquivo). Enquanto o
+// campo do nome está em edição os atalhos de teclado ficam desligados. Formato e leitura em viewer/core/SceneFile.h.
+//
 // Controles: Espaço ou P = pausar/continuar; . (ponto) = um passo (pausa se estiver rodando);
 //            esquerdo = selecionar/arrastar (roda = profundidade durante o arrasto); direito ou
 //            roda pressionada + mover = girar a câmera; roda = zoom; T = alvo da câmera;
 //            Home = resetar câmera; B/O = lançar caixa/esfera; Delete/X = apagar;
 //            ←/→ ou 1–9 = trocar de cena; R = reiniciar a cena; I = modo de interpolação;
-//            ESC = sair.
+//            M = painel do mundo; F11 = tela cheia sem borda; ESC = sair.
+//
+// V10 — fechamento: janela redimensionável (mínimo 960 x 700; os painéis se reorganizam abaixo de 1320 px de
+// largura), F11 alterna tela cheia sem borda, e o ctest roda os testes do núcleo e a fumaça sem janela.
 //
 // Verificação automática (sem interação):
 //     physics_viewer --frames 240 --screenshot saida.png
@@ -66,6 +79,7 @@
 #include "raygui.h"
 
 #include "viewer/core/BodyEditor.h"
+#include "viewer/core/ContactTracker.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
@@ -73,6 +87,7 @@
 #include "viewer/core/TimeControl.h"
 #include "viewer/core/WorldEditor.h"
 #include "viewer/core/Scene.h"
+#include "viewer/core/SceneFile.h"
 #include "viewer/core/ViewerMath.h"
 
 namespace {
@@ -209,7 +224,8 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(kScreenW, kScreenH, "physics_viewer — V7");
+    InitWindow(kScreenW, kScreenH, "physics_viewer — V10");
+    SetWindowMinSize(960, 700);   // abaixo disso os painéis da direita passam por cima do texto de baixo
     int fpsApplied = 120;
     float fpsSlider = 120.0f;
     SetTargetFPS(fpsApplied);   // o render NÃO precisa casar com a taxa da física: há interpolação
@@ -219,10 +235,15 @@ int main(int argc, char** argv) {
     viewer::OrbitCamera orbit;
     const std::size_t sceneCount = viewer::sceneList().size();
     std::size_t sceneIndex = 0;
+    viewer::ContactTracker tracker;   // V9: efeitos dos eventos de contato (vive mais que os mundos)
+    bool tintOn = true, flashOn = true, ringsOn = true;
     viewer::Scene scene = viewer::makeScene(sceneIndex);
+    scene.world->setContactListener(&tracker);
     orbit.target = scene.cameraTarget;
     orbit.setDistance(scene.cameraDistance);
     viewer::TimeControl timeCtl;
+    const bool startPaused = autoFrames <= 0;   // cenas começam PAUSADAS (a verificação automática --frames roda direto)
+    timeCtl.setPaused(startPaused);
     // Pedidos da barra de botões: o raygui devolve o clique durante o DESENHO, então viram flags
     // tratadas no início do quadro seguinte.
     bool uiRestart = false, uiStep = false, uiTogglePause = false, uiResetCam = false, uiPivot = false;
@@ -243,6 +264,20 @@ int main(int argc, char** argv) {
     int objTab = 0;
     // Painel "Adicionar objeto" (V8): aba principal (0 = Objeto, 1 = Adicionar) e o rascunho do que será criado.
     int mainTab = 0, addTab = 0, kindIdx = 0, qMode = 0, addFailFrames = 0;
+    // Cenas salvas/carregadas (V12).
+#ifdef VIEWER_SCENES_DIR
+    const std::string sceneDir = VIEWER_SCENES_DIR;
+#else
+    const std::string sceneDir = "scenes";
+#endif
+    std::vector<std::string> sceneFiles = viewer::listSceneFiles(sceneDir);
+    char fileName[49] = "";
+    bool fileNameEdit = false;
+    int fileScroll = 0, fileActive = -1, fileMsgFrames = 0;
+    bool fileMsgErr = false;
+    std::string fileMsg, loadRequest;
+    bool customActive = false;   // a cena atual veio de um arquivo: R recria a partir de customText
+    std::string customText;
     bool clickPlace = false;
     float sizeF = 1.0f, massS = 1.0f /* raiz da massa */, fricF = 0.5f, restF = 0.2f, launchSpd = 18.0f;
     float spPos[3] = {0.0f, 6.0f, 0.0f}, spVel[3] = {0.0f, 0.0f, 0.0f}, spAngV[3] = {0.0f, 0.0f, 0.0f};
@@ -256,19 +291,27 @@ int main(int argc, char** argv) {
         return viewer::interpolatePose(ms.getPrevious(), ms.getCurrent(), timeCtl.renderAlpha(*scene.world), mode);
     };
 
-    while (!WindowShouldClose()) {
+    // V12: com o campo de nome em edição os atalhos de teclado ficam desligados (senão "r", "t", espaço... agiriam).
+    SetExitKey(KEY_NULL);   // ESC não fecha a janela sozinho: fecha só fora da edição (ver abaixo)
+    bool quitRequested = false;
+    auto keyPressed = [&](int k) { return !fileNameEdit && IsKeyPressed(k); };
+    while (!WindowShouldClose() && !quitRequested) {
+        if (IsKeyPressed(KEY_ESCAPE)) {
+            if (fileNameEdit) fileNameEdit = false;   // ESC sai da edição do nome
+            else quitRequested = true;
+        }
         // Painéis (calculados a cada quadro: a janela é redimensionável).
         const float screenW = static_cast<float>(GetScreenWidth());
         const bool narrow = screenW < 1320.0f;   // barra e painel da direita não cabem lado a lado
         const Rectangle controlBar{16.0f, 8.0f, narrow ? screenW - 32.0f : screenW - 408.0f, 36.0f};
-        const Rectangle quatPanel{16.0f, 84.0f, 400.0f, 196.0f};
+        const Rectangle quatPanel{16.0f, 84.0f, 400.0f, 224.0f};
         const Rectangle interpPanel{screenW - 376.0f, narrow ? 52.0f : 12.0f, 360.0f, 214.0f};
         const Vector2 mouse = GetMousePosition();
         const float worldY = quatPanel.y + quatPanel.height + 62.0f;
         // Altura adaptativa: termina antes da faixa de texto de baixo (96 px), com no mínimo 180 px.
         const float worldH = std::min(276.0f, std::max(180.0f, static_cast<float>(GetScreenHeight()) - 96.0f - worldY));
         const Rectangle worldPanel{quatPanel.x, worldY, quatPanel.width, worldH};
-        const Rectangle objPanel{screenW - 376.0f, interpPanel.y + interpPanel.height + 8.0f, 360.0f, mainTab == 1 ? 344.0f : 270.0f};
+        const Rectangle objPanel{screenW - 376.0f, interpPanel.y + interpPanel.height + 8.0f, 360.0f, mainTab >= 1 ? 344.0f : 306.0f};
         const bool overGui = CheckCollisionPointRec(mouse, quatPanel) || CheckCollisionPointRec(mouse, interpPanel) ||
                              CheckCollisionPointRec(mouse, controlBar) || CheckCollisionPointRec(mouse, objPanel) ||
                              (showWorld && CheckCollisionPointRec(mouse, worldPanel));
@@ -282,37 +325,76 @@ int main(int argc, char** argv) {
         const float wheel = GetMouseWheelMove();
         if (drag.active()) drag.addDepth(static_cast<physics::Real>(wheel) * physics::Real(0.5));   // arrastando: roda = profundidade
         else if (!overGui) orbit.zoom(wheel);
-        if (IsKeyPressed(KEY_I))
+        if (keyPressed(KEY_I))
             mode = static_cast<viewer::InterpMode>((static_cast<int>(mode) + 1) % viewer::kInterpModeCount);
-        if (IsKeyPressed(KEY_T) || uiPivot) pivotSelected = !pivotSelected;
-        if (IsKeyPressed(KEY_M)) showWorld = !showWorld;
+        if (keyPressed(KEY_T) || uiPivot) pivotSelected = !pivotSelected;
+        if (keyPressed(KEY_M)) showWorld = !showWorld;
+        if (keyPressed(KEY_F11)) ToggleBorderlessWindowed();   // tela cheia sem borda (e volta)
 
         // Troca de cena: ←/→ (com volta) ou 1–9; R recria a atual (reinicia).
         std::size_t wanted = sceneIndex;
-        if (IsKeyPressed(KEY_RIGHT) || uiSceneDelta > 0) wanted = (sceneIndex + 1) % sceneCount;
-        if (IsKeyPressed(KEY_LEFT) || uiSceneDelta < 0) wanted = (sceneIndex + sceneCount - 1) % sceneCount;
+        if (keyPressed(KEY_RIGHT) || uiSceneDelta > 0) wanted = (sceneIndex + 1) % sceneCount;
+        if (keyPressed(KEY_LEFT) || uiSceneDelta < 0) wanted = (sceneIndex + sceneCount - 1) % sceneCount;
         for (int k = 0; k < 9; ++k)
-            if (IsKeyPressed(KEY_ONE + k) && static_cast<std::size_t>(k) < sceneCount) wanted = static_cast<std::size_t>(k);
+            if (keyPressed(KEY_ONE + k) && static_cast<std::size_t>(k) < sceneCount) wanted = static_cast<std::size_t>(k);
+        if (!loadRequest.empty()) {   // aba Cenas: carregar um arquivo
+            viewer::Scene loaded;
+            std::string err;
+            const std::string path = sceneDir + "/" + loadRequest + viewer::scenefile::kExtension;
+            if (viewer::loadSceneFile(path, loaded, err)) {
+                scene = std::move(loaded);
+                customText = viewer::serializeScene(scene);
+                customActive = true;
+                tracker.reset();
+                scene.world->setContactListener(&tracker);
+                sceneDefaults = viewer::captureWorld(*scene.world);
+                scene.world->setProfilingEnabled(profilingOn);
+                selected = physics::kInvalidBodyId;
+                drag.end();
+                timeCtl.onSceneReset();
+                timeCtl.setPaused(startPaused);
+                orbit.target = scene.cameraTarget;
+                orbit.setDistance(scene.cameraDistance);
+                fileMsg = "carregado: " + loadRequest + " (pausada)";
+                fileMsgErr = false;
+            } else {
+                fileMsg = "ERRO: " + err;
+                fileMsgErr = true;
+            }
+            fileMsgFrames = 600;
+            loadRequest.clear();
+        }
         const bool changed = wanted != sceneIndex;
-        if (changed || IsKeyPressed(KEY_R) || uiRestart) {
+        if (changed || keyPressed(KEY_R) || uiRestart) {
             sceneIndex = wanted;
-            scene = viewer::makeScene(sceneIndex);
+            bool fromFile = false;
+            if (!changed && customActive) {   // R / Reiniciar numa cena carregada: recria a partir do arquivo
+                std::string err;
+                fromFile = viewer::parseScene(customText, scene, err);
+            }
+            if (!fromFile) {
+                customActive = false;
+                scene = viewer::makeScene(sceneIndex);
+            }
+            tracker.reset();
+            scene.world->setContactListener(&tracker);
             sceneDefaults = viewer::captureWorld(*scene.world);
             scene.world->setProfilingEnabled(profilingOn);
             selected = physics::kInvalidBodyId;   // os ids são de outro mundo
             drag.end();
             timeCtl.onSceneReset();
+            timeCtl.setPaused(startPaused);   // trocar ou reiniciar a cena: volta pausada
             if (changed) {   // só ao trocar: R mantém a câmera que o usuário ajustou
                 orbit.target = scene.cameraTarget;
                 orbit.setDistance(scene.cameraDistance);
             }
         }
-        if (IsKeyPressed(KEY_HOME) || uiResetCam) {   // câmera: enquadramento inicial, alvo no centro do mundo
+        if (keyPressed(KEY_HOME) || uiResetCam) {   // câmera: enquadramento inicial, alvo no centro do mundo
             orbit.reset(scene.cameraTarget, scene.cameraDistance);
             pivotSelected = false;
         }
-        if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_SPACE) || uiTogglePause) timeCtl.togglePause();
-        if (IsKeyPressed(KEY_PERIOD) || uiStep) {   // um passo: se estava rodando, pausa primeiro
+        if (keyPressed(KEY_P) || keyPressed(KEY_SPACE) || uiTogglePause) timeCtl.togglePause();
+        if (keyPressed(KEY_PERIOD) || uiStep) {   // um passo: se estava rodando, pausa primeiro
             timeCtl.setPaused(true);
             timeCtl.requestStep();
         }
@@ -379,11 +461,11 @@ int main(int argc, char** argv) {
             if (pick.hit) drag.begin(scene, pick);
         }
         if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT) || !IsMouseButtonDown(MOUSE_BUTTON_LEFT)) drag.end();
-        if (IsKeyPressed(KEY_B) || IsKeyPressed(KEY_O)) {   // lança uma caixa (B) ou esfera (O) na direção do mouse
-            viewer::launchBody(scene, IsKeyPressed(KEY_O) ? viewer::ShapeKind::Sphere : viewer::ShapeKind::Box,
+        if (keyPressed(KEY_B) || keyPressed(KEY_O)) {   // lança uma caixa (B) ou esfera (O) na direção do mouse
+            viewer::launchBody(scene, keyPressed(KEY_O) ? viewer::ShapeKind::Sphere : viewer::ShapeKind::Box,
                                rayO + rayD * physics::Real(1.5), rayD, physics::Real(18));
         }
-        if ((IsKeyPressed(KEY_DELETE) || IsKeyPressed(KEY_X)) && selected != physics::kInvalidBodyId) {
+        if ((keyPressed(KEY_DELETE) || keyPressed(KEY_X)) && selected != physics::kInvalidBodyId) {
             drag.end();
             viewer::deleteBody(scene, selected);
             selected = physics::kInvalidBodyId;
@@ -394,6 +476,7 @@ int main(int argc, char** argv) {
         if (!timeCtl.paused() && drag.active()) drag.apply(scene, rayO, rayD,
                                                       static_cast<physics::Real>(GetFrameTime()) * static_cast<physics::Real>(timeCtl.timeScale()));   // tempo FÍSICO do quadro (câmera lenta incluída)
         timeCtl.advance(*scene.world, static_cast<physics::Real>(GetFrameTime()));
+        if (!timeCtl.paused()) tracker.update(GetFrameTime() * timeCtl.timeScale());   // flashes decaem em tempo físico
 
         // --- Desenho ----------------------------------------------------------------------------------------------
         BeginDrawing();
@@ -408,7 +491,18 @@ int main(int argc, char** argv) {
         for (const viewer::SceneBody& body : scene.bodies) {
             const physics::Transform pose = renderPose(body.id);
             const viewer::Mat4f m = viewer::toMat4(pose);
-            if (!hideModels) drawBody(body, m);
+            if (!hideModels) {
+                if (!body.isStatic && (tintOn || flashOn)) {   // V9: cor por estado (dormindo) e flash de impacto
+                    viewer::SceneBody tb = body;
+                    const viewer::Rgb c = viewer::stateTint(viewer::Rgb{body.r, body.g, body.b},
+                                                            tintOn && !scene.world->isAwake(body.id),
+                                                            flashOn ? tracker.flashOf(body.id) : 0.0f);
+                    tb.r = c.r; tb.g = c.g; tb.b = c.b;
+                    drawBody(tb, m);
+                } else {
+                    drawBody(body, m);
+                }
+            }
             if (body.id == selected) drawHighlight(body, m);
             if (body.id == infoBody) {
                 focusMatrix = m;
@@ -428,6 +522,14 @@ int main(int argc, char** argv) {
             DrawLine3D(Vector3{float(pa.x), float(pa.y), float(pa.z)}, Vector3{float(pb.x), float(pb.y), float(pb.z)},
                        Color{235, 235, 235, 255});
         }
+        if (ringsOn) {   // anéis nos pontos de impacto: crescem e somem em 0,4 s
+            for (const viewer::ContactTracker::Marker& mk : tracker.markers()) {
+                const float k = mk.age / viewer::ContactTracker::kFlashSeconds;
+                const Vector3 c{static_cast<float>(mk.point.x), static_cast<float>(mk.point.y), static_cast<float>(mk.point.z)};
+                DrawSphereWires(c, 0.1f + 0.5f * mk.intensity * k, 6, 10,
+                                Color{255, 235, 120, static_cast<unsigned char>(255.0f * (1.0f - k))});
+            }
+        }
         if (hasPlace) {   // prévia do "posicionar com clique": fio amarelo no ponto de criação
             const Vector3 c{static_cast<float>(placePt.x), static_cast<float>(placePt.y), static_cast<float>(placePt.z)};
             if (kindIdx == 1) DrawSphereWires(c, sizeF * 0.5f, 8, 12, YELLOW);
@@ -442,9 +544,9 @@ int main(int argc, char** argv) {
         EndMode3D();
 
         // --- HUD ------------------------------------------------------------------------------------------------------
-        hudText(TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1,
-                            static_cast<int>(sceneCount), scene.name.c_str(),
-                            static_cast<int>(scene.bodies.size())),
+        hudText(customActive ? TextFormat("[arquivo] %s   (%d corpos)", scene.name.c_str(), static_cast<int>(scene.bodies.size()))
+                             : TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount),
+                                          scene.name.c_str(), static_cast<int>(scene.bodies.size())),
                  16, 52, 22, RAYWHITE);
         // Barra de controle (topo).
         GuiPanel(controlBar, nullptr);
@@ -465,7 +567,7 @@ int main(int argc, char** argv) {
             bx += 4.0f * 42.0f + 12.0f;
             timeCtl.setScaleIndex(sc);
             if (GuiButton(place(26.0f), "<")) uiSceneDelta = -1;
-            GuiLabel(place(84.0f), TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount)));
+            GuiLabel(place(84.0f), customActive ? "arquivo" : TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount)));
             if (GuiButton(place(26.0f), ">")) uiSceneDelta = 1;
             if (GuiButton(place(92.0f), "Reset cam")) uiResetCam = true;
             if (GuiButton(place(150.0f), pivotSelected ? "Alvo: selecionado" : "Alvo: mundo")) uiPivot = true;
@@ -505,7 +607,14 @@ int main(int argc, char** argv) {
             DrawText(TextFormat("Euler  yaw %+.1f  pitch %+.1f  roll %+.1f", static_cast<double>(eu.yaw) * rad2deg,
                                 static_cast<double>(eu.pitch) * rad2deg, static_cast<double>(eu.roll) * rad2deg),
                      static_cast<int>(x0), static_cast<int>(y0), 18, lock ? kWarn : kInkDim);
-            if (lock) DrawText("GIMBAL LOCK: yaw e roll giram o mesmo eixo", static_cast<int>(x0), static_cast<int>(y0) + 22, 16, kWarn);
+            // Velocidade angular do corpo (a que o motor integra no quatérnio: dq/dt = 1/2 w q).
+            if (scene.world->isValidBody(infoBody)) {
+                const physics::Vector3 w = scene.world->getBody(infoBody).getAngularVelocity();
+                DrawText(TextFormat("w (%+.2f %+.2f %+.2f)  |w| %.2f rad/s", static_cast<double>(w.x), static_cast<double>(w.y),
+                                    static_cast<double>(w.z), static_cast<double>(w.length())),
+                         static_cast<int>(x0), static_cast<int>(y0) + 24, 16, kBlueInk);
+            }
+            if (lock) DrawText("GIMBAL LOCK: yaw e roll giram o mesmo eixo", static_cast<int>(x0), static_cast<int>(y0) + 46, 16, kWarn);
         } else {
             DrawText("(esta cena nao tem corpo em foco)", static_cast<int>(quatPanel.x) + 12, static_cast<int>(quatPanel.y) + 40, 18, kInkDim);
         }
@@ -547,7 +656,7 @@ int main(int argc, char** argv) {
                                                            : "Objetos"));
             const float ox = objPanel.x + 12.0f, ow = objPanel.width - 24.0f;
             float oy = objPanel.y + 32.0f;
-            GuiToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Objeto;Adicionar", &mainTab);
+            GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Objeto;Adicionar;Cenas", &mainTab);
             oy += 36.0f;
             const float labelW = 124.0f, valueW = 88.0f;
             const float barW = ow - labelW - valueW - 8.0f;
@@ -561,7 +670,51 @@ int main(int argc, char** argv) {
                 return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse, bar);
             };
             using physics::Real;
-            if (mainTab == 1) {   // ---- Adicionar objeto (V8) ----
+            if (mainTab == 2) {   // ---- Cenas: salvar e carregar (V12) ----
+                DrawText("nome do arquivo (sem extensao):", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+                oy += 18.0f;
+                if (GuiTextBox(Rectangle{ox, oy, ow, 26.0f}, fileName, 48, fileNameEdit)) fileNameEdit = !fileNameEdit;
+                oy += 32.0f;
+                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Salvar cena atual")) {
+                    const std::string typed = fileName;
+                    const std::string base = viewer::sanitizeSceneFileName(typed);
+                    const std::string path = sceneDir + "/" + base + viewer::scenefile::kExtension;
+                    const bool existed = std::find(sceneFiles.begin(), sceneFiles.end(), base) != sceneFiles.end();
+                    if (!typed.empty()) scene.name = typed;   // o nome digitado vira o nome da cena
+                    std::string err;
+                    if (viewer::saveSceneFile(scene, path, err)) {
+                        fileMsg = "salvo: " + base + viewer::scenefile::kExtension + (existed ? " (sobrescreveu)" : "");
+                        fileMsgErr = false;
+                        sceneFiles = viewer::listSceneFiles(sceneDir);
+                    } else {
+                        fileMsg = "ERRO: " + err;
+                        fileMsgErr = true;
+                    }
+                    fileMsgFrames = 600;
+                    fileNameEdit = false;
+                }
+                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Atualizar lista")) sceneFiles = viewer::listSceneFiles(sceneDir);
+                oy += 36.0f;
+                DrawText(TextFormat("arquivos em scenes/ (%d):", static_cast<int>(sceneFiles.size())), static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+                oy += 18.0f;
+                std::string joined;
+                for (std::size_t i = 0; i < sceneFiles.size(); ++i) {
+                    std::string n = sceneFiles[i];
+                    std::replace(n.begin(), n.end(), ';', '_');   // ';' separa os itens da lista do raygui
+                    joined += (i ? ";" : "") + n;
+                }
+                GuiListView(Rectangle{ox, oy, ow, 104.0f}, joined.empty() ? "(nenhum arquivo)" : joined.c_str(), &fileScroll, &fileActive);
+                oy += 110.0f;
+                if (GuiButton(Rectangle{ox, oy, ow, 28.0f}, "Carregar o arquivo escolhido") &&
+                    fileActive >= 0 && fileActive < static_cast<int>(sceneFiles.size()))
+                    loadRequest = sceneFiles[static_cast<std::size_t>(fileActive)];
+                oy += 32.0f;
+                if (fileMsgFrames > 0) {
+                    --fileMsgFrames;
+                    DrawText(fileMsg.size() > 40 ? (fileMsg.substr(0, 38) + "..").c_str() : fileMsg.c_str(), static_cast<int>(ox),
+                             static_cast<int>(oy), 14, fileMsgErr ? kWarn : kBlueInk);
+                }
+            } else if (mainTab == 1) {   // ---- Adicionar objeto (V8) ----
                 GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Forma;Posicao;Orient;Veloc", &addTab);
                 oy += 34.0f;
                 if (addTab == 0) {   // forma, tamanho, massa, material
@@ -693,7 +846,7 @@ int main(int argc, char** argv) {
             GuiPanel(worldPanel, "Mundo e debug (M esconde)");
             const float wx = worldPanel.x + 12.0f, ww = worldPanel.width - 24.0f;
             float wy = worldPanel.y + 30.0f;
-            GuiToggleGroup(Rectangle{wx, wy, ww / 4.0f, 26.0f}, "Mundo;Solver;Debug;Stats", &worldTab);
+            GuiToggleGroup(Rectangle{wx, wy, ww / 5.0f, 26.0f}, "Mundo;Solver;Debug;Stats;Evento", &worldTab);
             wy += 34.0f;
             const float labelW = 128.0f, valueW = 96.0f;
             const float barW = ww - labelW - valueW - 8.0f;
@@ -747,6 +900,19 @@ int main(int argc, char** argv) {
                 wy += 30.0f;
                 if (GuiButton(Rectangle{wx, wy, ww / 2.0f - 4.0f, 26.0f}, "Padrao")) dbgFlags = static_cast<std::uint32_t>(physics::kDebugDefault);
                 if (GuiButton(Rectangle{wx + ww / 2.0f + 4.0f, wy, ww / 2.0f - 4.0f, 26.0f}, "Desligar")) dbgFlags = 0;
+            } else if (worldTab == 4) {   // Evento (V9)
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " cor por estado (dormindo = azul)", &tintOn);
+                wy += 24.0f;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " flash no inicio do contato", &flashOn);
+                wy += 24.0f;
+                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " aneis nos pontos de impacto", &ringsOn);
+                wy += 30.0f;
+                const physics::WorldStats st = world.getStats();
+                auto line = [&](const char* text) { DrawText(text, static_cast<int>(wx), static_cast<int>(wy), 16, kInk); wy += 19.0f; };
+                line(TextFormat("contatos agora %d   dormindo %d de %d", static_cast<int>(world.getContacts().size()), st.sleepingBodies, st.awakeBodies + st.sleepingBodies));
+                line(TextFormat("inicios %llu   fins %llu", static_cast<unsigned long long>(tracker.begins()), static_cast<unsigned long long>(tracker.ends())));
+                line(TextFormat("impacto: ultimo %.1f   maximo %.1f m/s", static_cast<double>(tracker.lastImpact()), static_cast<double>(tracker.maxImpact())));
+                if (GuiButton(Rectangle{wx, wy + 4.0f, ww, 24.0f}, "Zerar contadores")) tracker.reset();
             } else {   // Stats
                 bool prof = profilingOn;
                 GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " medir tempos (profiling)", &prof);
