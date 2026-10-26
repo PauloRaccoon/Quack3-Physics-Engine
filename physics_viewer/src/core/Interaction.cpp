@@ -15,11 +15,12 @@ namespace viewer {
 
 using namespace physics;
 
-PickResult pickBody(const Scene& scene, const Vector3& origin, const Vector3& direction, Real maxDistance) {
+PickResult pickBody(const Scene& scene, const Vector3& origin, const Vector3& direction, Real maxDistance,
+                    bool includeStatic) {
     PickResult out;
     if (!scene.world || !origin.isFinite() || !direction.isFinite() || direction.lengthSquared() < Real(1e-12)) return out;
     QueryFilter filter;
-    filter.includeStatic = false;   // clicar no chão não seleciona nada
+    filter.includeStatic = includeStatic;   // padrão: clicar no chão não seleciona nada
     RaycastHit hit;
     if (!scene.world->raycast(origin, direction, maxDistance, hit, filter)) return out;
     if (!scene.world->isValidBody(hit.body)) return out;
@@ -131,8 +132,9 @@ BodyId launchBody(Scene& scene, ShapeKind kind, const Vector3& origin, const Vec
     return sb.id;
 }
 
-bool deleteBody(Scene& scene, BodyId id) {
-    if (!scene.world || !scene.world->isValidBody(id) || !scene.world->getBody(id).isDynamic()) return false;
+bool deleteBody(Scene& scene, BodyId id, bool allowStatic) {
+    if (!scene.world || !scene.world->isValidBody(id)) return false;
+    if (!scene.world->getBody(id).isDynamic() && !allowStatic) return false;
     scene.world->destroyBody(id);   // destrói também as juntas ligadas a ele
     scene.bodies.erase(std::remove_if(scene.bodies.begin(), scene.bodies.end(),
                                       [id](const SceneBody& b) { return b.id == id; }),

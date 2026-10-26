@@ -1,0 +1,93 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name Meu cenario (editor)
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 0 1.5 0 14
+body
+  type static
+  shape box 10 0.5 10
+  position 0 -0.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 120 130 140
+end
+body
+  type static
+  shape box 3 0.15 1.5
+  position -4 2.2 0
+  orientation 0.9800666 -0 -0 -0.19866933
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0.2
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 150 156 170
+end
+body
+  type static
+  shape box 0.2 1.5 3
+  position 8 1.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0.2
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 150 156 170
+end
+body
+  type dynamic
+  shape sphere 0.5
+  mass 2
+  position -6 5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0.3
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 230 100 120
+  focus
+end
+body
+  type dynamic
+  shape box 0.15 2 1
+  mass 3
+  position 3 2.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0.2
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 200 160 240
+end
+body
+  type static
+  shape none
+  position 3 0.4 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.5 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 170 170 170
+end
+joint hinge 5 6 3 0.4000001 0 0 0 1 0
+link 5 6

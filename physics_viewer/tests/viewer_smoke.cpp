@@ -10,10 +10,18 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <string>
+#include <vector>
+
+#include "physics/geometry/PolyhedronShape.h"
 
 #include "viewer/core/BodyEditor.h"
 #include "viewer/core/ContactTracker.h"
+#include "viewer/core/ConvexHull.h"
 #include "viewer/core/Interaction.h"
+#include "viewer/core/JointEditor.h"
+#include "viewer/core/ModelCollider.h"
+#include "viewer/core/ObjModel.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/Scene.h"
@@ -100,7 +108,7 @@ static void fuzz(unsigned seed) {
     const Real nan = std::numeric_limits<Real>::quiet_NaN();
     bool healthy = true;
     for (int op = 0; op < 400; ++op) {
-        const int k = r.pick(14);
+        const int k = r.pick(18);
         const std::size_t nb = sc.bodies.size();
         const physics::BodyId any = nb ? sc.bodies[static_cast<std::size_t>(r.pick(static_cast<int>(nb)))].id : physics::kInvalidBodyId;
         switch (k) {
@@ -153,9 +161,40 @@ static void fuzz(unsigned seed) {
                     break;
                 }
                 tc.setPaused(r.pick(2) == 0); tc.requestStep(); break;
+            case 14: {   // V14: cenário estático (caixas de qualquer tamanho, também valores absurdos)
+                SpawnParams p;
+                p.kind = r.pick(3) == 0 ? static_cast<SpawnKind>(r.pick(kSpawnKindCount)) : SpawnKind::Box;
+                p.isStatic = true;
+                p.size = r.range(Real(-1), Real(6));
+                p.boxScale = Vector3(r.range(Real(-1), Real(30)), r.range(Real(-1), Real(30)), r.range(Real(-1), Real(30)));
+                p.position = Vector3(r.range(-15, 15), r.range(-1, 8), r.range(-15, 15));
+                p.orientation = physics::Quaternion(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1), r.range(-1, 1));
+                if (r.pick(10) == 0) p.boxScale.y = nan;
+                const physics::BodyId id = spawnBody(sc, p);
+                CHECK(id == physics::kInvalidBodyId || (sc.world->isValidBody(id) && sc.world->getBody(id).isStatic()));
+                break;
+            }
+            case 15: {   // V14: junta aleatória (corpo-corpo ou corpo-mundo), às vezes inválida
+                JointParams jp;
+                jp.kind = static_cast<JointKind>(r.pick(kJointKindCount));
+                jp.a = any;
+                jp.b = r.pick(3) == 0 ? physics::kInvalidBodyId
+                                      : (nb ? sc.bodies[static_cast<std::size_t>(r.pick(static_cast<int>(nb)))].id : physics::kInvalidBodyId);
+                jp.anchor = Vector3(r.range(-10, 10), r.range(0, 10), r.range(-10, 10));
+                jp.axis = Vector3(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1));
+                jp.collideConnected = r.pick(2) == 0;
+                if (r.pick(12) == 0) jp.anchor.x = nan;
+                const int before = jointCount(sc);
+                const bool ok = createJoint(sc, jp);
+                CHECK(ok ? jointCount(sc) == before + 1 : jointCount(sc) == before);
+                break;
+            }
+            case 16: if (r.pick(2) == 0) destroyLastJoint(sc); break;
+            case 17: if (r.pick(4) == 0) deleteBody(sc, any, true); break;   // também apaga estáticos (chão, pivôs)
             default: {   // trocar de cena (os ids antigos deixam de valer)
                 tracker.reset();
-                sc = makeScene(static_cast<std::size_t>(r.pick(static_cast<int>(sceneList().size()))));
+                sc = r.pick(4) == 0 ? makeEmptyScene(r.pick(2) == 0)
+                                    : makeScene(static_cast<std::size_t>(r.pick(static_cast<int>(sceneList().size()))));
                 sc.world->setContactListener(&tracker);
                 tc.onSceneReset();
                 break;
@@ -169,9 +208,73 @@ static void fuzz(unsigned seed) {
     sc.world->setContactListener(nullptr);
 }
 
+/// V15a: fuzz do fecho convexo e do leitor .obj. Nuvens de todos os tipos (bolas, planas, em linha, com
+/// duplicados, em escalas de 1e-3 a 1e3, quase degeneradas): ou falha com mensagem, ou o motor aceita o fecho.
+static void fuzzHullAndObj(unsigned seed) {
+    Rng r(seed);
+    int okCount = 0, failCount = 0;
+    for (int it = 0; it < 300; ++it) {
+        const int kind = r.pick(6);
+        const Real scale = std::pow(Real(10), r.range(Real(-3), Real(3)));
+        const int n = 4 + r.pick(120);
+        std::vector<Vector3> pts;
+        for (int i = 0; i < n; ++i) {
+            Vector3 v(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1));
+            switch (kind) {
+                case 0: break;                                           // bola/cubo
+                case 1: v.y = 0; break;                                  // plano
+                case 2: v.y = v.z = 0; break;                            // reta
+                case 3: v = v.lengthSquared() > Real(1e-4) ? v.normalized() : v; break;   // esfera
+                case 4: v.y *= Real(1e-6); break;                        // quase plano
+                default: break;                                          // duplicados (abaixo)
+            }
+            Vector3 q = v * scale + Vector3(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1)) * ((r.pick(4) == 0 && kind != 1 && kind != 2) ? scale * 5 : Real(0));
+            if (kind == 5 && i > 0 && r.pick(3) == 0) q = pts[static_cast<std::size_t>(r.pick(i))];   // duplicado exato
+            pts.push_back(q);
+        }
+        ConvexHull h;
+        std::string err;
+        if (buildConvexHull(pts, h, &err)) {
+            ++okCount;
+            CHECK(h.faces.size() >= 4 && h.vertices.size() >= 4);
+            bool engineOk = true;
+            try {
+                const physics::PolyhedronShape shape(h.vertices, h.faces);
+                engineOk = shape.getVolume() > 0;
+            } catch (const std::exception& ex) {
+                engineOk = false;
+                std::printf("  nuvem kind=%d n=%d escala=%g recusada pelo motor: %s\n", kind, n, static_cast<double>(scale), ex.what());
+            }
+            CHECK(engineOk);
+        } else {
+            ++failCount;
+            CHECK(!err.empty() && h.vertices.empty());
+        }
+    }
+    CHECK(okCount > 50 && failCount > 10);
+    std::printf("  fecho: %d ok, %d recusados (seed %u)\n", okCount, failCount, seed);
+    // .obj com lixo: nunca trava nem devolve modelo parcial
+    for (int it = 0; it < 300; ++it) {
+        std::string text;
+        const char* words[] = {"v", "vt", "vn", "f", "usemtl", "mtllib", "o", "1", "2", "3", "-1", "0", "1/1", "1//1", "1/2/3", "x", "nan", "1e9", "#", "\n", "\n", " ", "\r\n", "/", "-"};
+        const int len = r.pick(80);
+        for (int i = 0; i < len; ++i) { text += words[r.pick(static_cast<int>(sizeof(words) / sizeof(words[0])))]; text += ' '; }
+        ObjModel m;
+        std::string err;
+        if (parseObj(text, m, err)) {
+            CHECK(!m.positions.empty() && !m.triangles.empty());
+            for (const ObjTriangle& t : m.triangles)
+                for (int k = 0; k < 3; ++k) CHECK(t.p[k] >= 0 && static_cast<std::size_t>(t.p[k]) < m.positions.size());
+        } else {
+            CHECK(!err.empty() && m.positions.empty() && m.triangles.empty());
+        }
+    }
+}
+
 int main() {
     smokeAllScenes();
     for (unsigned seed = 1; seed <= 6; ++seed) fuzz(seed * 7919u);
+    for (unsigned seed = 1; seed <= 4; ++seed) fuzzHullAndObj(seed * 104729u);
     std::printf("fumaca: %d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

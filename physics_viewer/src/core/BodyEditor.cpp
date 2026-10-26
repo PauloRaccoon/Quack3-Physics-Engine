@@ -16,6 +16,9 @@ namespace {
 
 bool editable(const PhysicsWorld& w, BodyId id) { return w.isValidBody(id) && w.getBody(id).isDynamic(); }
 
+/// V14: pose e material também valem para corpos estáticos (para montar o cenário).
+bool placeable(const PhysicsWorld& w, BodyId id) { return w.isValidBody(id); }
+
 Real clampTo(Real v, Real lo, Real hi) { return std::min(std::max(v, lo), hi); }
 
 } // namespace
@@ -44,13 +47,13 @@ bool setMass(PhysicsWorld& world, BodyId id, Real mass) {
 }
 
 bool setFriction(PhysicsWorld& world, BodyId id, Real v) {
-    if (!editable(world, id) || !std::isfinite(v)) return false;
+    if (!placeable(world, id) || !std::isfinite(v)) return false;
     world.getBody(id).setFriction(clampTo(v, Real(0), Real(2)));
     return true;
 }
 
 bool setRestitution(PhysicsWorld& world, BodyId id, Real v) {
-    if (!editable(world, id) || !std::isfinite(v)) return false;
+    if (!placeable(world, id) || !std::isfinite(v)) return false;
     world.getBody(id).setRestitution(clampTo(v, Real(0), Real(1)));
     return true;
 }
@@ -80,7 +83,7 @@ bool setAllowSleep(PhysicsWorld& world, BodyId id, bool allow) {
 }
 
 bool setPosition(PhysicsWorld& world, BodyId id, const Vector3& position) {
-    if (!editable(world, id) || !position.isFinite()) return false;
+    if (!placeable(world, id) || !position.isFinite()) return false;
     Transform xf = world.getBody(id).getTransform();
     xf.position = position;
     world.setBodyTransform(id, xf);
@@ -88,7 +91,7 @@ bool setPosition(PhysicsWorld& world, BodyId id, const Vector3& position) {
 }
 
 bool setOrientationAxisAngle(PhysicsWorld& world, BodyId id, const Vector3& axis, Real angle) {
-    if (!editable(world, id) || !axis.isFinite() || !std::isfinite(angle) || axis.lengthSquared() < Real(1e-12)) return false;
+    if (!placeable(world, id) || !axis.isFinite() || !std::isfinite(angle) || axis.lengthSquared() < Real(1e-12)) return false;
     Transform xf = world.getBody(id).getTransform();
     xf.rotation = Quaternion::fromAxisAngle(axis.normalized(), angle);
     world.setBodyTransform(id, xf);
@@ -96,7 +99,7 @@ bool setOrientationAxisAngle(PhysicsWorld& world, BodyId id, const Vector3& axis
 }
 
 bool resetOrientation(PhysicsWorld& world, BodyId id) {
-    if (!editable(world, id)) return false;
+    if (!placeable(world, id)) return false;
     Transform xf = world.getBody(id).getTransform();
     xf.rotation = Quaternion::identity();
     world.setBodyTransform(id, xf);

@@ -1,0 +1,5 @@
+Modelos de exemplo do physics_viewer (V15): .obj + .mtl + textura .png na MESMA pasta.
+- cubo.obj    cubo de 1 m, textura xadrez (a colisao e exata: o fecho de um cubo e o proprio cubo)
+- esfera.obj  icosfera de raio 0,5 m (320 faces), textura listras
+- toro.obj    toro CONCAVO: desenha-se o toro, mas colide como o seu fecho convexo (o buraco e preenchido)
+Voce pode usar qualquer .obj (v, vt, f com v/vt/vn, usemtl, mtllib) e .mtl (newmtl, Kd, map_Kd); veja include/viewer/core/ObjModel.h.

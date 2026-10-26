@@ -31,12 +31,17 @@ add_library(viewer_core STATIC
   src/core/OrbitCamera.cpp
   src/core/RenderPose.cpp
   src/core/Interaction.cpp
+  src/core/JointEditor.cpp
+  src/core/ConvexHull.cpp
+  src/core/ObjModel.cpp
+  src/core/ModelCollider.cpp
   src/core/TimeControl.cpp
   src/core/BodyEditor.cpp
   src/core/PolyShapes.cpp
   src/core/ObjectSpawner.cpp
   src/core/ContactTracker.cpp
   src/core/SceneFile.cpp
+  src/core/DockLayout.cpp
   src/core/WorldEditor.cpp
   src/core/Scene.cpp)
 target_include_directories(viewer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -55,6 +60,7 @@ if(VIEWER_BUILD_TESTS)
   enable_testing()
   add_executable(viewer_tests tests/viewer_tests.cpp)
   target_link_libraries(viewer_tests PRIVATE viewer_core)
+  target_compile_definitions(viewer_tests PRIVATE VIEWER_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
   add_test(NAME viewer_tests COMMAND viewer_tests)
 
   # Fumaça sem janela: todas as cenas por 20 s + fuzz de criar/editar/apagar/trocar de cena.

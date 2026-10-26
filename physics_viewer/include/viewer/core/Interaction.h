@@ -20,9 +20,9 @@ struct PickResult {
     physics::Real distance = 0;    ///< distância da origem do raio ao ponto
 };
 
-/// Raycast do motor contra os corpos dinâmicos/cinemáticos da cena. Direção não finita ou nula: sem acerto.
+/// Raycast do motor contra os corpos dinâmicos/cinemáticos da cena (V14: `includeStatic` inclui o cenário estático). Direção não finita ou nula: sem acerto.
 PickResult pickBody(const Scene& scene, const physics::Vector3& origin, const physics::Vector3& direction,
-                    physics::Real maxDistance = physics::Real(200));
+                    physics::Real maxDistance = physics::Real(200), bool includeStatic = false);
 
 /// Arrastar com mola: uma mola-amortecedor liga o ponto clicado do corpo ao ponto do raio do mouse
 /// na MESMA profundidade em que o clique aconteceu. A força é aplicada no ponto (gera torque: o
@@ -66,7 +66,8 @@ physics::BodyId launchBody(Scene& scene, ShapeKind kind, const physics::Vector3&
                            const physics::Vector3& direction, physics::Real speed);
 
 /// Apaga um corpo NÃO estático: destrói no mundo (e suas juntas) e remove de `bodies`, de `links` e
-/// do foco. Estáticos (chão, âncoras) e ids inválidos: devolve false e não muda nada.
-bool deleteBody(Scene& scene, physics::BodyId id);
+/// do foco. Estáticos (chão, âncoras) e ids inválidos: devolve false e não muda nada — a menos que
+/// `allowStatic` (V14, editor de cena) permita apagar também o cenário estático.
+bool deleteBody(Scene& scene, physics::BodyId id, bool allowStatic = false);
 
 } // namespace viewer

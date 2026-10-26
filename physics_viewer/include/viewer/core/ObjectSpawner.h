@@ -25,6 +25,10 @@ constexpr physics::Real kMinMass = physics::Real(0.05);
 constexpr physics::Real kMaxMass = physics::Real(100);
 constexpr physics::Real kMaxLinearSpeed = physics::Real(60);    ///< [m/s]
 constexpr physics::Real kMaxAngularSpeed = physics::Real(30);   ///< [rad/s]
+constexpr physics::Real kMinBoxExtent = physics::Real(0.05);    ///< V14: aresta mínima de caixa (por eixo) [m]
+constexpr physics::Real kMaxBoxExtent = physics::Real(40);      ///< V14: aresta máxima (paredes, plataformas) [m]
+constexpr physics::Real kMinBoxScale = physics::Real(0.1);
+constexpr physics::Real kMaxBoxScale = physics::Real(10);
 constexpr physics::Real kMaxCoordinate = physics::Real(1000);   ///< |posição| por eixo [m]
 } // namespace spawnlimits
 
@@ -41,6 +45,10 @@ struct SpawnParams {
     physics::Quaternion orientation = physics::Quaternion::identity();   ///< normalizada ao criar
     physics::Vector3 velocity;
     physics::Vector3 angularVelocity;
+    /// V14: estático = corpo de massa infinita (parede, rampa, plataforma); massa e velocidades são ignoradas.
+    bool isStatic = false;
+    /// V14: só para Box. Aresta de cada eixo = size · boxScale (escala limitada a [0,1; 10], aresta a [0,05; 40] m).
+    physics::Vector3 boxScale = physics::Vector3(1, 1, 1);
 };
 
 /// Quatérnio (w, x, y, z) -> unitário. Norma ~0 ou não finito: identidade e `ok = false`.

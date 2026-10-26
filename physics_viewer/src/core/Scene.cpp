@@ -521,6 +521,16 @@ const std::vector<SceneInfo>& sceneList() {
     return list;
 }
 
+Scene makeEmptyScene(bool withGround) {
+    Scene s;
+    s.name = withGround ? "Cena nova (so o chao)" : "Cena nova (vazia)";
+    s.world = std::make_unique<PhysicsWorld>();
+    if (withGround) addGround(s);
+    s.cameraTarget = Vec3f{0.0f, 1.5f, 0.0f};
+    s.cameraDistance = 14.0f;
+    return s;
+}
+
 Scene makeScene(std::size_t index) {
     const std::vector<SceneInfo>& list = sceneList();
     return list[std::min(index, list.size() - 1)].make();

@@ -461,7 +461,7 @@ bool parseScene(const std::string& text, Scene& out, std::string& error) {
         }
         if (!sawHeader) fail(0, "arquivo vazio (falta 'physics_scene 1')");
         if (inBody) fail(lineNo, "'body' sem 'end'");
-        if (bodies.empty()) fail(0, "a cena nao tem nenhum corpo");
+        // V14: cena sem corpos é válida (cena nova vazia).
         const int nBodies = static_cast<int>(bodies.size());
         for (const JointDraft& j : joints)
             if (j.a > nBodies || j.b > nBodies) fail(j.line, "a junta usa um corpo que nao existe (corpos: 1 a " + std::to_string(nBodies) + ")");

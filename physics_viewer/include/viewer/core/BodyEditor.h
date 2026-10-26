@@ -3,6 +3,7 @@
 // Edição de um corpo em tempo de execução (sem raylib, testável): parâmetros materiais, pose,
 // velocidades, acordar/dormir. O painel do objeto selecionado só chama estas funções.
 // Todas validam o id (corpo vivo e dinâmico, exceto onde dito) e ignoram valores não finitos.
+// V14: posição, orientação, atrito e restituição também valem para corpos ESTÁTICOS (montar cenário).
 // =============================================================================
 #pragma once
 

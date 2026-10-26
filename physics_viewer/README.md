@@ -3,7 +3,7 @@
 Janela de demonstração do `../physics_engine` (C++17 + [raylib](https://www.raylib.com/)). Fica numa pasta
 **ao lado** do motor, que continua sem nenhuma dependência gráfica.
 
-> Estado: **V12** (salvar e carregar cenas; sobre as cenas de colisão e rotação da V11 e o fechamento da V10). Janela redimensionável, painéis de
+> Estado: **V15a** (núcleo da importação 3D: fecho convexo e leitor .obj/.mtl; a janela vem na V15b); **V14** (editor de cena: cena nova, objetos estáticos, juntas; sobre a V13, painéis acoplados nas laterais, com rolagem e largura ajustável; sobre a V12, salvar e carregar cenas; sobre as cenas de colisão e rotação da V11 e o fechamento da V10). Janela redimensionável, painéis de
 > quatérnio, mundo, objeto e adicionar objetos, eventos de contato, e testes sem janela no `ctest`. O roteiro completo
 > está no `README.md` da pasta acima.
 
@@ -51,8 +51,8 @@ Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `
 | `Home` ou botão **Reset cam** | resetar a câmera (ângulos padrão, alvo no centro do mundo, distância inicial da cena) |
 | `B` / `O` | lançar uma caixa / esfera na direção do mouse (18 m/s) |
 | `Delete` ou `X` | apagar o corpo selecionado (juntas ligadas a ele também somem) |
-| painel à direita, em cima | escolher o modo de interpolação e o FPS de render (slider de 10 a 240) |
-| painel à direita, embaixo | abas **Objeto** (editar o corpo selecionado: Material, Posicao, Veloc, Orient) e **Adicionar** (criar objetos, ver abaixo) |
+| coluna da direita, em cima | escolher o modo de interpolação e o FPS de render (slider de 10 a 240) |
+| coluna da direita, embaixo | abas **Objeto** (editar o corpo selecionado: Material, Posicao, Veloc, Orient) e **Adicionar** (criar objetos, ver abaixo) |
 | `←` / `→` | cena anterior / próxima |
 | `1` … `9` | ir direto para a cena |
 | `R` | reiniciar a cena atual (mantém a câmera) |
@@ -62,8 +62,11 @@ Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `
 | `.` ou botão **Passo** | avança **um** passo físico fixo (se estava rodando, pausa primeiro) |
 | botões `1x` `1/2` `1/4` `1/10` | escala de tempo (câmera lenta) |
 | botões `<` `>` e **Reiniciar** | cena anterior / próxima; recriar a cena atual (como `R`) |
-| `M` | mostrar / esconder o painel do mundo (à esquerda, embaixo) |
-| `F11` | tela cheia sem borda (e volta). A janela é redimensionável (mínimo 960 × 700); abaixo de 1320 px de largura os painéis da direita descem para não cobrir a barra de controle |
+| `M` | mostrar / esconder o painel do mundo (coluna da esquerda, embaixo) |
+| arrastar a **borda** de uma coluna | muda a largura dela (340 px a 45% da janela); a cena 3D ocupa o que sobra |
+| botão `<` / `>` no topo da coluna | recolhe / reabre a coluna (faixa de 28 px) |
+| roda sobre uma coluna, ou arrastar a barra fina à direita dela | rola a coluna (a roda só dá zoom quando o mouse está sobre a cena) |
+| `F11` | tela cheia sem borda (e volta). A janela é redimensionável (mínimo 1100 × 700) |
 | `ESC` | sair |
 
 Verificação automática, sem interação (roda 240 quadros, salva uma captura e sai com código 0):
@@ -101,7 +104,7 @@ escreva uma função `makeXScene()` e acrescente-a em `sceneList()`.
 
 ## Painel do mundo e debug (V7)
 
-Painel à esquerda, embaixo (tecla `M` mostra/esconde), com quatro abas. A edição passa por `WorldEditor.h`
+Painel na coluna da esquerda, embaixo (tecla `M` mostra/esconde), com quatro abas. A edição passa por `WorldEditor.h`
 (sem raylib, testado); valores não finitos são ignorados e o que excede a faixa é limitado.
 
 | Aba | Conteúdo |
@@ -123,9 +126,50 @@ Observações:
 - As cenas 8 e 9 têm Δt de 0,5 s e 0,35 s, abaixo da faixa do slider de frequência (10 Hz); o slider mostra o
   extremo, mas o valor só muda se você o arrastar.
 
+## Importação 3D — núcleo (V15a)
+
+Ainda **sem janela** (a aba Importar e o desenho com textura são a V15b). Já existe e está testado:
+
+- **`ConvexHull`** — fecho convexo 3D por *quickhull*, algoritmo próprio: tetraedro inicial com pontos extremos, "olho" = ponto mais distante, região visível e horizonte, faces novas ligadas ao olho. Triângulos vizinhos e coplanares são **fundidos em polígonos** (um cubo volta com 6 faces de 4 vértices, não 12 triângulos, e apoia estável na face inteira). A tolerância é relativa ao tamanho e menor que a do motor; o resultado é conferido como o motor vai conferir e, se a fusão falhar, volta a triângulos. Entradas degeneradas (menos de 4 pontos, NaN, coincidentes, colineares, coplanares, finíssimas) dão erro com mensagem, nunca um poliedro inválido.
+- **`ObjModel`** — leitor de `.obj` (`v`, `vt`, `f` em qualquer das formas `v`, `v/vt`, `v//vn`, `v/vt/vn`, índices negativos, polígonos em leque, `usemtl`, `mtllib`) e `.mtl` (`newmtl`, `Kd`, `map_Kd`). Erros com número de linha e **sem modelo parcial**; limites (32 MB, 400 mil vértices, 800 mil triângulos, coordenadas até 1e6); `mtllib`/`map_Kd` com `..`, caminho absoluto ou unidade são recusados; `.mtl` ausente só gera aviso.
+- **`ModelCollider`** — do modelo à forma de colisão: centra na caixa envolvente (precisão com coordenadas grandes), calcula o fecho, centra no **centroide** (o corpo gira em torno do centro de massa) e devolve o `PolyhedronShape`, o deslocamento para desenhar a malha original e indicadores (vértices/faces do fecho, volume do modelo × do fecho, `concave`). `autoScale` ajusta a maior dimensão a um tamanho-alvo. Escala de 0,001 a 1000; maior dimensão final de 0,05 a 40 m.
+- **Limitação assumida:** um modelo côncavo (toro, xícara) **colide como o seu fecho** — o buraco é preenchido (teste: uma esfera pousa no "toro cheio"). A malha desenhada continua sendo o modelo original.
+- Exemplos em `physics_viewer/models/`: `cubo` (textura xadrez), `esfera` (icosfera de 320 faces, listras) e `toro` (côncavo), com `.mtl` e `.png`.
+
+## Editor de cena (V14)
+
+Monte a própria cena do zero e salve pela aba **Cenas** (V12):
+
+1. Aba **Cenas** → **Nova (vazia)** ou **Nova (so o chao)**. A cena nasce pausada. (R recria a cena a partir do estado em que ela nasceu, então salve antes de reiniciar.)
+2. Aba **Adicionar** → **Forma**: a caixa ganha três sliders de aresta (x, y, z; aresta = tamanho × escala, de 0,05 a 40 m) e a opção **estatico**. Um objeto estático tem massa infinita: serve de parede, plataforma ou, inclinado pela aba **Orient**, de rampa. Massa e velocidades são ignoradas para ele.
+3. Aba **Objeto**: marque **clicar tambem em estaticos** para selecionar o cenário (chão, paredes). Um estático selecionado aceita posição, orientação (quatérnio por eixo-ângulo), atrito e restituição; **Apagar este objeto** (ou Del/X) o remove, inclusive o chão.
+4. Aba **Juntas**: A = corpo selecionado (clique); B = o **mundo** (cria um pivô fixo cinza no ponto de ancoragem), um corpo já escolhido ou "B: clicar". A âncora vem dos sliders, do último **ponto clicado** na cena ou do **centro de A**. Dobradiça usa o eixo (sliders); distância liga o centro de A ao ponto/centro de B com o comprimento atual. A cena mostra uma prévia (esfera amarela na âncora, linhas até A e B, eixo da dobradiça em vermelho). **Apagar a ultima** desfaz a última junta e o pivô que ficou sem uso.
+
+O núcleo (sem janela, testado) está em `Scene` (`makeEmptyScene`), `ObjectSpawner` (`isStatic`, `boxScale`), `BodyEditor` (pose e material de estáticos), `Interaction` (`pickBody(..., includeStatic)`, `deleteBody(..., allowStatic)`) e `JointEditor` (`createJoint`, `destroyLastJoint`, `jointCount`, `pointOnRay`). Exemplo pronto: `scenes/15_Meu_cenario_editor.scene` (rampa, muro, bola e uma pá presa ao mundo por dobradiça de eixo Z). Cenas sem nenhum corpo agora são arquivos válidos.
+
+## Painéis acoplados e rolagem (V13)
+
+Os painéis não flutuam mais sobre a cena: ficam em **duas colunas fixas nas laterais**, e a cena 3D ocupa o espaço entre
+elas (como no Blender). Isso acaba com a sobreposição de textos: campo novo só aumenta a rolagem.
+
+- **Esquerda:** quatérnio do corpo em foco (com a velocidade angular **w**) e o painel do mundo/debug (`M` esconde).
+  **Direita:** interpolação de render e FPS, e o painel de abas Objeto | Adicionar | Cenas.
+- **Largura:** arraste a borda (cursor de redimensionar). Limites: mínimo 340 px, máximo 45% da janela, e a cena nunca
+  fica com menos de 320 px. O botão `<` / `>` do topo recolhe e reabre a coluna.
+- **Rolagem:** roda do mouse sobre a coluna, ou arrastar / clicar na barra fina à direita dela. Os controles recortados
+  pela coluna ficam bloqueados (um botão escondido não dispara por baixo).
+- **A cena 3D** é desenhada numa **textura do tamanho exato da área central**: a proporção da câmera acompanha a área, e o
+  clique/arrasto usa o raio calculado dentro dela. Girar a câmera só começa com o botão apertado sobre a cena. Mudar a
+  largura de uma coluna reenquadra a cena (o campo de visão vertical é fixo: a largura aparece ou some nas laterais).
+  Observação: a textura não usa o antisserrilhamento (MSAA) da janela, então as bordas dos objetos ficam um pouco mais serrilhadas.
+- **Layout salvo:** larguras e colunas recolhidas ficam em `scenes/viewer_layout.ini` e voltam na próxima execução.
+  Arquivo inválido é ignorado (vale o padrão).
+- Núcleo `DockLayout.h` (sem raylib, testado): retângulos das colunas, bordas, viewport e rolagem (polegar proporcional,
+  limites, roda); janela pequena demais faz as colunas cederem espaço à cena.
+
 ## Salvar e carregar cenas (V12)
 
-Aba **Cenas** do painel da direita (`SceneFile.h`, sem raylib, testado). Os arquivos ficam em `physics_viewer/scenes/`
+Aba **Cenas** da coluna da direita (`SceneFile.h`, sem raylib, testado). Os arquivos ficam em `physics_viewer/scenes/`
 (o caminho é fixado na compilação).
 
 - **Salvar cena atual:** grava o **estado de agora** (poses, quatérnios, velocidades, parâmetros dos corpos, objetos que
@@ -164,7 +208,7 @@ O viewer escuta os eventos de contato do motor (`IContactListener`, via `Contact
 
 ## Adicionar objetos (V8)
 
-Aba **Adicionar** do painel à direita. A criação passa por `ObjectSpawner.h` (sem raylib, testado).
+Aba **Adicionar** da coluna da direita. A criação passa por `ObjectSpawner.h` (sem raylib, testado).
 
 | Sub-aba | O que define |
 |---|---|
@@ -180,7 +224,7 @@ Aba **Adicionar** do painel à direita. A criação passa por `ObjectSpawner.h` 
 
 ## Painel do objeto selecionado (V6)
 
-Aba **Objeto** do painel à direita; mostra os parâmetros quando há um corpo selecionado (clique). A edição passa por `BodyEditor.h` (sem raylib,
+Aba **Objeto** da coluna da direita; mostra os parâmetros quando há um corpo selecionado (clique). A edição passa por `BodyEditor.h` (sem raylib,
 testado); todas as funções recusam corpos estáticos, ids inválidos e valores não finitos, e limitam o que
 excede a faixa.
 
@@ -208,8 +252,7 @@ os botões levantam um pedido que é tratado no início do quadro seguinte.
   movimento suave.
 - **Reset cam / Alvo:** `OrbitCamera::reset` e alternar o alvo (mundo ⇄ selecionado); resetar também volta o
   alvo para o centro do mundo.
-- **Largura mínima:** a barra ocupa ~850 px; com a janela mais estreita que ~1220 px o painel da direita
-  desce para não ficar embaixo dela.
+- **Largura mínima:** a barra ocupa ~850 px e agora atravessa a janela inteira (as colunas ficam abaixo dela).
 
 ## Interação (V4)
 
@@ -259,7 +302,7 @@ desenha os eixos locais do corpo (X vermelho, Y verde, Z azul).
 ```text
 physics_viewer/
 ├── CMakeLists.txt
-├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, ContactTracker, SceneFile, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
+├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, JointEditor, ConvexHull, ObjModel, ModelCollider, ContactTracker, SceneFile, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
 ├── src/core/
 ├── src/app/main.cpp       a janela (única parte que usa raylib)
 ├── tools/scene_export.cpp  grava as cenas embutidas como .scene (sem raylib)
@@ -273,7 +316,7 @@ raylib é fina.
 
 ## O que foi verificado
 
-- Núcleo e testes (1336 verificações em `viewer_tests`, mais 467 em `viewer_smoke` (o fuzz também salva e recarrega a cena no meio); `SceneFile`: ida e volta das 14 cenas (texto idêntico e trajetória igual), arquivo em disco, 22 entradas inválidas com a mensagem esperada, limites e CRLF/comentários; as cenas da V11: bola que desmonta a pirâmide, porta que só gira em Y com o centro a 1 m do eixo, gangorra só em Z, martelo que derruba a torre, bilhar sem ganho de energia: matemática, câmera, as 14 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `ContactTracker`: intensidade por velocidade, tinta por estado, flash que decai, marcadores limitados, contadores, eventos reais do motor (caixa que cai) e a pilha adormecendo; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
+- Núcleo e testes (1610 verificações em `viewer_tests`, mais 3834 em `viewer_smoke` (o fuzz também salva e recarrega a cena no meio, cria estáticos de qualquer tamanho, cria/apaga juntas e troca para cenas vazias); V15a: fecho (cubo com 1000 pontos internos, cubo girado de 1 mm a 600 m, esfera, nuvens, duplicados, 8 entradas degeneradas, determinismo, aceitação pelo motor), 15 entradas `.obj` inválidas com a mensagem esperada, `.mtl`, carregamento do disco com avisos, forma centrada no centroide, toro côncavo sem cair pelo buraco, cubo importado repousando sobre a face; fuzz de 1200 nuvens (a metade degenerada) e 1200 textos `.obj` aleatórios; V14: cena vazia ida e volta, caixa estática com arestas e limites, `BodyEditor` em estáticos, `JointEditor` (3 tipos, corpo-mundo, 8 entradas inválidas sem mudar a cena, apagar com pivô órfão, simulação estável, ida e volta pelo `.scene`), `pointOnRay`; `DockLayout`: larguras e limites das colunas, arrastar a borda, recolher, janelas de 2000 a 1 px sem sobreposição, arquivo de layout (ida e volta e 9 entradas inválidas), rolagem (roda, polegar, limites, NaN); `SceneFile`: ida e volta das 14 cenas (texto idêntico e trajetória igual), arquivo em disco, 22 entradas inválidas com a mensagem esperada, limites e CRLF/comentários; as cenas da V11: bola que desmonta a pirâmide, porta que só gira em Y com o centro a 1 m do eixo, gangorra só em Z, martelo que derruba a torre, bilhar sem ganho de energia: matemática, câmera, as 14 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `ContactTracker`: intensidade por velocidade, tinta por estado, flash que decai, marcadores limitados, contadores, eventos reais do motor (caixa que cai) e a pilha adormecendo; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
 - `main.cpp`: passa na verificação de tipos contra os cabeçalhos da raylib 5.5 e do raygui 4.0, sem warnings, em `float` e
   `double`. A convenção de matriz foi conferida no código-fonte da raylib (campo `mN` = elemento `N` do
   array passado a `rlMultMatrixf`).
@@ -281,6 +324,11 @@ raylib é fina.
   painéis é escuro (os painéis do raygui são claros) e o texto direto sobre a cena ganha uma faixa escura
   translúcida. **Não verificado por mim:** o ajuste fino dos tamanhos depois da V7.1 (não consigo abrir a janela
   no ambiente de desenvolvimento, sem X11/OpenGL); as larguras foram calculadas a partir das capturas.
+  Na V14, confira: a aba Juntas cabe no painel (5 sliders, botões, mensagens) e rola com a coluna; o clique na cena escolhe A/B/ponto sem arrastar o corpo; a prévia amarela acompanha os sliders; criar uma dobradiça ao mundo faz o corpo girar preso ao pivô cinza; Nova (vazia) mostra a grade sem corpos; salvar e carregar mantém paredes e juntas.
+  Na V13, confira (a mudança mais arriscada, feita sem poder abrir a janela): as colunas aparecem nas laterais, a cena
+  fica no meio e **não está esticada** ao arrastar a borda; clicar e arrastar objetos acerta onde o mouse aponta; a
+  rolagem funciona e nada sai da coluna; o texto do HUD aparece dentro da cena; `<` `>` recolhem e reabrem; o layout volta
+  ao reabrir o programa.
   Na V12, confira: a aba Cenas cabe no painel (campo, botões, lista de 104 px, mensagem), digitar o nome não aciona
   atalhos, Salvar cria o arquivo em `physics_viewer/scenes/` e Carregar traz a cena de volta pausada.
   Na V10, confira: se a janela redimensiona sem sobrepor painéis (mínimo 960 × 700) e se F11 entra e sai da tela cheia.

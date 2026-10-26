@@ -19,9 +19,16 @@
 #include <limits>
 #include <string>
 
+#include "physics/geometry/BoxShape.h"
+#include "physics/geometry/SphereShape.h"
 #include "viewer/core/BodyEditor.h"
+#include "viewer/core/ConvexHull.h"
 #include "viewer/core/ContactTracker.h"
+#include "viewer/core/DockLayout.h"
 #include "viewer/core/Interaction.h"
+#include "viewer/core/JointEditor.h"
+#include "viewer/core/ModelCollider.h"
+#include "viewer/core/ObjModel.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/WorldEditor.h"
@@ -743,8 +750,15 @@ static void testBodyEditor() {
     CHECK(setAwake(w, id, true) && w.getBody(id).isAwake());
 
     // --- estáticos e ids inválidos: nada muda ----------------------------------------------------------------------------------
-    CHECK(!setMass(w, ground, Real(2)) && !setFriction(w, ground, Real(1)) && !setPosition(w, ground, Vector3(0, 9, 0)) &&
-          !setOrientationAxisAngle(w, ground, Vector3(0, 1, 0), Real(1)) && !setAwake(w, ground, false) && !zeroVelocities(w, ground));
+    // V14: posição/orientação/material valem também para estáticos; massa, velocidades e sono continuam só para dinâmicos.
+    CHECK(!setMass(w, ground, Real(2)) && !setAwake(w, ground, false) && !zeroVelocities(w, ground) &&
+          !setGravityScale(w, ground, Real(1)));
+    {
+        const Real f0 = w.getBody(ground).getFriction();
+        CHECK(setFriction(w, ground, Real(1)) && setFriction(w, ground, f0));
+        CHECK(setPosition(w, ground, Vector3(0, 9, 0)) && setPosition(w, ground, Vector3(0, Real(-0.5), 0)));
+        CHECK(setOrientationAxisAngle(w, ground, Vector3(0, 1, 0), Real(1)) && resetOrientation(w, ground));
+    }
     CHECK(w.getBody(ground).getTransform().position.nearlyEqual(Vector3(0, Real(-0.5), 0), Real(1e-6)));
     CHECK(!setMass(w, kInvalidBodyId, Real(2)) && !setPosition(w, kInvalidBodyId, Vector3(0, 0, 0)) && !setAwake(w, 9999, true));
 
@@ -1206,7 +1220,7 @@ static void testSceneFile() {
         {"vazio", "", "vazio"},
         {"sem cabecalho", "body\nend\n", "physics_scene"},
         {"versao", "physics_scene 7\n", "versao"},
-        {"sem corpos", "physics_scene 1\nname x\n", "nenhum corpo"},
+        {"junta sem corpos", "physics_scene 1\nname x\njoint ballsocket 1 2 0 0 0 0\n", "nao existe"},
         {"comando", "physics_scene 1\nxyz 1\n", "desconhecido"},
         {"body sem end", "physics_scene 1\nbody\n type static\n", "sem 'end'"},
         {"numero", withLine(" velocity 1 abc 0\n"), "numero invalido"},
@@ -1259,6 +1273,128 @@ static void testSceneFile() {
         std::string err;
         CHECK(parseScene(t, s, err) && s.name == "Cena #1 com hash" && s.bodies.size() == 1 && s.bodies[0].isStatic);
     }
+}
+
+static void testDockLayout() {
+    using namespace viewer;
+    DockLayout d;
+    d.setWindow(1280, 720);
+    // Padrão: colunas de 400 e 380; as três áreas cobrem a janela sem sobrepor.
+    const RectF L = d.dock(DockSide::Left), R = d.dock(DockSide::Right), V = d.viewport();
+    CHECK(near(L.w, 400.0f) && near(R.w, 380.0f) && near(L.y, DockLayout::kTopBar) && near(L.h, 720.0f - DockLayout::kTopBar));
+    CHECK(near(L.x, 0.0f) && near(R.right(), 1280.0f));
+    CHECK(near(V.x, L.w + DockLayout::kSplitter) && near(V.right(), R.x - DockLayout::kSplitter));
+    CHECK(V.w > 400.0f && near(V.h, L.h));
+    CHECK(near(d.splitter(DockSide::Left).x, L.right()) && near(d.splitter(DockSide::Right).right(), R.x));
+
+    // Limites da largura: mínimo, fração máxima e viewport mínimo.
+    d.setWidth(DockSide::Left, 10.0f);
+    CHECK(near(d.leftWidth(), DockLayout::kMinDock));
+    d.setWidth(DockSide::Left, 5000.0f);
+    CHECK(d.leftWidth() <= 0.45f * 1280.0f + 0.01f);
+    CHECK(d.viewport().w >= DockLayout::kMinViewport - 0.01f);
+    d.setWidth(DockSide::Right, 5000.0f);
+    CHECK(d.viewport().w >= DockLayout::kMinViewport - 0.01f);
+    d.setWidth(DockSide::Left, std::numeric_limits<float>::quiet_NaN());   // ignorado
+    CHECK(std::isfinite(d.leftWidth()));
+    d.setWidth(DockSide::Left, 400.0f);
+    d.setWidth(DockSide::Right, 380.0f);
+
+    // Recolher: faixa de 28 px, sem borda; o viewport cresce; reabrir volta à largura escolhida.
+    d.toggleCollapsed(DockSide::Right);
+    CHECK(near(d.dock(DockSide::Right).w, DockLayout::kCollapsed) && d.splitter(DockSide::Right).w == 0.0f);
+    CHECK(near(d.viewport().right(), 1280.0f - DockLayout::kCollapsed));
+    d.toggleCollapsed(DockSide::Right);
+    CHECK(near(d.dock(DockSide::Right).w, 380.0f));
+
+    // Arrastar a borda esquerda: a largura segue o mouse (mantendo o ponto agarrado).
+    DockSide side;
+    const RectF sp = d.splitter(DockSide::Left);
+    CHECK(d.hitSplitter(sp.x + 1.0f, 300.0f, side) && side == DockSide::Left);
+    CHECK(d.hitSplitter(sp.x - 2.0f, 300.0f, side));            // tolerância
+    CHECK(!d.hitSplitter(sp.x + 40.0f, 300.0f, side));
+    CHECK(!d.hitSplitter(sp.x + 1.0f, 10.0f, side));            // sobre a barra do topo não conta
+    d.beginDrag(DockSide::Left, sp.x + 3.0f);
+    CHECK(d.dragging());
+    d.dragTo(sp.x + 3.0f + 100.0f);
+    CHECK(near(d.leftWidth(), 500.0f, 0.6f));
+    d.dragTo(-500.0f);                                           // além da janela: fica no mínimo
+    CHECK(near(d.leftWidth(), DockLayout::kMinDock));
+    d.endDrag();
+    CHECK(!d.dragging());
+    // Borda direita: arrastar para a esquerda alarga a coluna.
+    d.setWidth(DockSide::Right, 380.0f);
+    const RectF spr = d.splitter(DockSide::Right);
+    d.beginDrag(DockSide::Right, spr.x + 3.0f);
+    d.dragTo(spr.x + 3.0f - 60.0f);
+    CHECK(near(d.rightWidth(), 440.0f, 0.6f));
+    d.endDrag();
+
+    // Janela pequena: as colunas cedem ao viewport mínimo; nada fica negativo nem se sobrepõe.
+    DockLayout s;
+    for (float w : {2000.0f, 1000.0f, 900.0f, 700.0f, 400.0f, 100.0f, 1.0f}) {
+        s.setWindow(w, 500);
+        const RectF a = s.dock(DockSide::Left), b = s.dock(DockSide::Right), v = s.viewport();
+        CHECK(a.w >= 0 && b.w >= 0 && v.w >= 1.0f);
+        CHECK(a.right() <= v.x + 0.01f && v.right() <= b.x + 0.01f || w < 700.0f);
+        CHECK(v.x >= 0 && v.right() <= w + 0.01f || w < 700.0f);
+    }
+    s.setWindow(std::numeric_limits<float>::quiet_NaN(), 500);   // ignorado
+    CHECK(s.viewport().w >= 1.0f);
+
+    // Arquivo de layout: ida e volta e entradas inválidas.
+    DockLayout a;
+    a.setWindow(1600, 900);
+    a.setWidth(DockSide::Left, 450);
+    a.setWidth(DockSide::Right, 360);
+    a.setCollapsed(DockSide::Right, true);
+    DockLayout b;
+    b.setWindow(1600, 900);
+    CHECK(b.parse(a.serialize()));
+    CHECK(near(b.leftWidth(), 450) && near(b.rightWidth(), 360) && b.collapsed(DockSide::Right) && !b.collapsed(DockSide::Left));
+    CHECK(b.serialize() == a.serialize());
+    const char* badInputs[] = {"", "left 400\n", "viewer_layout 2\n", "viewer_layout 1\nleft nan\n", "viewer_layout 1\nleft 5\n",
+                               "viewer_layout 1\nleft_collapsed 2\n", "viewer_layout 1\nfoo 1\n", "viewer_layout 1\nleft 400 500\n",
+                               "viewer_layout 1\nright inf\n"};
+    for (const char* bad : badInputs) {
+        DockLayout t;
+        t.setWindow(1600, 900);
+        const std::string before = t.serialize();
+        CHECK(!t.parse(bad));
+        CHECK(t.serialize() == before);   // nada mudou
+    }
+
+    // Rolagem.
+    ScrollState sc;
+    sc.setSizes(1000, 400);
+    CHECK(sc.scrollable() && near(sc.maxOffset(), 600.0f) && sc.offset() == 0.0f);
+    sc.wheel(-1.0f);                                             // roda para baixo: desce o conteúdo
+    CHECK(near(sc.offset(), ScrollState::kWheelStep));
+    sc.wheel(+100.0f);
+    CHECK(sc.offset() == 0.0f);                                  // limitado em cima
+    sc.wheel(-1000.0f);
+    CHECK(near(sc.offset(), 600.0f));                            // e embaixo
+    sc.setSizes(500, 400);                                       // conteúdo encolheu: o deslocamento acompanha
+    CHECK(near(sc.offset(), 100.0f));
+    sc.setSizes(300, 400);
+    CHECK(!sc.scrollable() && sc.offset() == 0.0f && sc.maxOffset() == 0.0f);
+    sc.setSizes(2000, 500);
+    CHECK(near(sc.thumbHeight(500), 125.0f));                    // fração visível 1/4 do trilho
+    sc.setOffset(0);
+    CHECK(sc.thumbTop(500) == 0.0f);
+    sc.setOffset(sc.maxOffset());
+    CHECK(near(sc.thumbTop(500) + sc.thumbHeight(500), 500.0f, 0.01f));
+    sc.setOffset(0);
+    sc.dragThumb(375.0f, 500);                                   // arrastar o polegar até o fim
+    CHECK(near(sc.offset(), sc.maxOffset(), 0.5f));
+    sc.jumpTo(0.0f, 500);
+    CHECK(sc.offset() == 0.0f);
+    sc.setSizes(100000, 100);                                    // polegar nunca menor que 24 px
+    CHECK(sc.thumbHeight(500) >= 24.0f);
+    sc.setOffset(std::numeric_limits<float>::quiet_NaN());       // ignorado
+    CHECK(std::isfinite(sc.offset()));
+    sc.setSizes(std::numeric_limits<float>::infinity(), 100);
+    CHECK(std::isfinite(sc.maxOffset()));
 }
 
 static void testCollisionScenes() {
@@ -1342,6 +1478,519 @@ static void testCollisionScenes() {
     }
 }
 
+// =================================================================================================
+// V14 — editor de cena: cena vazia, estáticos, dimensões, juntas
+// =================================================================================================
+static void testSceneEditor() {
+    using namespace physics;
+    // --- cena vazia / só chão -------------------------------------------------------------------------
+    {
+        Scene e = makeEmptyScene(false);
+        CHECK(e.world && e.bodies.empty() && e.links.empty() && e.focus == kInvalidBodyId);
+        Scene g = makeEmptyScene(true);
+        CHECK(g.bodies.size() == 1 && g.bodies[0].isStatic && g.world->getBody(g.bodies[0].id).isStatic());
+        // vazia: pode simular sem nenhum corpo
+        for (int i = 0; i < 10; ++i) e.world->update(Real(1) / Real(60));
+        // salvar/carregar cena vazia
+        const std::string txt = serializeScene(e);
+        Scene back;
+        std::string err;
+        CHECK(parseScene(txt, back, err) && back.bodies.empty());
+        CHECK(serializeScene(back) == txt);
+    }
+    // --- estático + dimensões da caixa ------------------------------------------------------------------
+    Scene s = makeEmptyScene(true);
+    {
+        SpawnParams p;
+        p.isStatic = true;
+        p.size = Real(1);
+        p.boxScale = Vector3(6, 3, Real(0.4));   // parede 6 x 3 x 0,4
+        p.position = Vector3(0, Real(1.5), -5);
+        p.mass = 7; p.velocity = Vector3(5, 5, 5);
+        const BodyId w = spawnBody(s, p);
+        CHECK(w != kInvalidBodyId);
+        const RigidBody& b = s.world->getBody(w);
+        CHECK(b.isStatic() && !b.isDynamic());
+        CHECK(near(b.getLinearVelocity().length(), 0));
+        const SceneBody& sb = s.bodies.back();
+        CHECK(sb.isStatic && sb.kind == ShapeKind::Box);
+        CHECK(near(sb.halfExtents.x, 3.0f) && near(sb.halfExtents.y, 1.5f) && near(sb.halfExtents.z, 0.2f));
+        // limites: escala e aresta
+        SpawnParams q;
+        q.size = Real(4);
+        q.boxScale = Vector3(1000, Real(0.00001), 5);   // escala -> [0,1; 10]; aresta -> [0,05; 40]
+        const BodyId r = spawnBody(s, q);
+        CHECK(r != kInvalidBodyId);
+        const SceneBody& sr = s.bodies.back();
+        CHECK(near(sr.halfExtents.x, 20.0f) && near(sr.halfExtents.y, 0.2f) && near(sr.halfExtents.z, 10.0f));
+        // não finito: recusa e não muda a cena
+        const std::size_t n = s.bodies.size();
+        SpawnParams bad;
+        bad.boxScale = Vector3(std::numeric_limits<Real>::quiet_NaN(), 1, 1);
+        CHECK(spawnBody(s, bad) == kInvalidBodyId && s.bodies.size() == n);
+        // padrão (sem escala): caixa cúbica como na V8
+        SpawnParams c;
+        c.size = Real(2);
+        spawnBody(s, c);
+        CHECK(near(s.bodies.back().halfExtents.x, 1.0f) && near(s.bodies.back().halfExtents.z, 1.0f));
+        // estático de outra forma
+        SpawnParams sp;
+        sp.kind = SpawnKind::Pyramid; sp.isStatic = true; sp.position = Vector3(3, 1, 3);
+        const BodyId pyr = spawnBody(s, sp);
+        CHECK(pyr != kInvalidBodyId && s.world->getBody(pyr).isStatic() && s.bodies.back().isStatic);
+        // rampa: caixa estática inclinada 20 graus; uma esfera rola por ela
+        SpawnParams ramp;
+        ramp.isStatic = true;
+        ramp.boxScale = Vector3(8, Real(0.3), 3);
+        ramp.position = Vector3(-4, Real(1.5), 4);
+        ramp.orientation = orientationFromAxisAngle(Vector3(0, 0, 1), Real(-0.35));
+        CHECK(spawnBody(s, ramp) != kInvalidBodyId);
+    }
+    // --- BodyEditor em estáticos ------------------------------------------------------------------------
+    {
+        const BodyId wall = s.bodies[1].id;   // a parede
+        CHECK(setPosition(*s.world, wall, Vector3(1, 2, 3)));
+        CHECK(near(s.world->getBody(wall).getTransform().position.y, 2));
+        CHECK(setOrientationAxisAngle(*s.world, wall, Vector3(0, 1, 0), Real(0.5)));
+        const Quaternion& q = s.world->getBody(wall).getOrientation();
+        CHECK(near(q.w, std::cos(Real(0.25))) && near(q.y, std::sin(Real(0.25))));
+        CHECK(resetOrientation(*s.world, wall) && near(s.world->getBody(wall).getOrientation().w, 1));
+        CHECK(setFriction(*s.world, wall, Real(0.9)) && near(s.world->getBody(wall).getFriction(), 0.9));
+        CHECK(setRestitution(*s.world, wall, Real(0.5)));
+        // o resto continua só para dinâmicos
+        CHECK(!setMass(*s.world, wall, 3) && !setLinearVelocity(*s.world, wall, Vector3(1, 0, 0)) &&
+              !zeroVelocities(*s.world, wall) && !setAwake(*s.world, wall, true) && !setGravityScale(*s.world, wall, 1));
+        CHECK(!setPosition(*s.world, kInvalidBodyId, Vector3()));
+        CHECK(!setPosition(*s.world, wall, Vector3(std::numeric_limits<Real>::infinity(), 0, 0)));
+    }
+    // --- deleteBody com allowStatic / pickBody com estáticos ---------------------------------------------
+    {
+        Scene t = makeEmptyScene(true);
+        const BodyId ground = t.bodies[0].id;
+        CHECK(!deleteBody(t, ground));
+        CHECK(!pickBody(t, Vector3(0, 5, 0), Vector3(0, -1, 0)).hit);
+        const PickResult pk = pickBody(t, Vector3(0, 5, 0), Vector3(0, -1, 0), Real(200), true);
+        CHECK(pk.hit && pk.body == ground && near(pk.point.y, 0));
+        CHECK(deleteBody(t, ground, true) && t.bodies.empty());
+    }
+    // --- JointEditor -------------------------------------------------------------------------------------
+    {
+        Scene t = makeEmptyScene(true);
+        auto box = [&](Real x, Real y, bool st) {
+            SpawnParams p;
+            p.position = Vector3(x, y, 0);
+            p.isStatic = st;
+            return spawnBody(t, p);
+        };
+        const BodyId A = box(0, 3, false), B = box(2, 3, false), S = box(5, 3, true);
+        CHECK(A != kInvalidBodyId && B != kInvalidBodyId && S != kInvalidBodyId);
+        CHECK(jointCount(t) == 0);
+        std::string err;
+        JointParams jp;
+        jp.kind = JointKind::Hinge; jp.a = A; jp.b = B; jp.anchor = Vector3(1, 3, 0); jp.axis = Vector3(0, 0, 2);
+        CHECK(createJoint(t, jp, &err) && jointCount(t) == 1 && t.links.size() == 1);
+        jp.kind = JointKind::BallSocket;
+        CHECK(createJoint(t, jp) && jointCount(t) == 2);
+        jp.kind = JointKind::Distance;
+        CHECK(createJoint(t, jp) && jointCount(t) == 3);
+        // para o mundo: cria pivô estático sem forma
+        const std::size_t before = t.bodies.size();
+        JointParams w;
+        w.kind = JointKind::Hinge; w.a = A; w.b = kInvalidBodyId; w.anchor = Vector3(0, 6, 0); w.axis = Vector3(1, 0, 0);
+        CHECK(createJoint(t, w) && t.bodies.size() == before + 1 && jointCount(t) == 4);
+        const SceneBody& pivot = t.bodies.back();
+        CHECK(pivot.isStatic && t.world->getBody(pivot.id).getShape() == nullptr);
+        CHECK(near(t.world->getBody(pivot.id).getTransform().position.y, 6));
+        // distância ao mundo: comprimento = distância atual
+        JointParams dw;
+        dw.kind = JointKind::Distance; dw.a = B; dw.anchor = Vector3(2, 8, 0);
+        CHECK(createJoint(t, dw) && jointCount(t) == 5);
+        {
+            bool found = false;
+            t.world->forEachJoint([&](const JointConstraint& j, BodyId, BodyId) {
+                if (j.getType() == ConstraintType::Distance)
+                    found = true;
+            });
+            CHECK(found);
+        }
+        // falhas não mudam a cena
+        const std::size_t nb = t.bodies.size(), nl = t.links.size();
+        const int nj = jointCount(t);
+        JointParams bad = jp;
+        bad.a = kInvalidBodyId; CHECK(!createJoint(t, bad, &err) && !err.empty());
+        bad = jp; bad.b = 99999; CHECK(!createJoint(t, bad));
+        bad = jp; bad.b = bad.a; CHECK(!createJoint(t, bad));
+        bad = jp; bad.kind = JointKind::Hinge; bad.axis = Vector3(); CHECK(!createJoint(t, bad));
+        bad = jp; bad.anchor = Vector3(std::numeric_limits<Real>::quiet_NaN(), 0, 0); CHECK(!createJoint(t, bad));
+        bad = jp; bad.anchor = Vector3(5000, 0, 0); CHECK(!createJoint(t, bad));
+        bad = jp; bad.kind = JointKind::Distance; bad.b = kInvalidBodyId; bad.anchor = t.world->getBody(A).getWorldCenterOfMass();
+        CHECK(!createJoint(t, bad, &err));   // pontos coincidentes
+        JointParams ss; ss.a = S; ss.b = kInvalidBodyId; ss.anchor = Vector3(0, 0, 0); ss.kind = JointKind::BallSocket;
+        CHECK(!createJoint(t, ss));          // estático ligado ao mundo: nada a simular
+        CHECK(t.bodies.size() == nb && t.links.size() == nl && jointCount(t) == nj);
+        // a simulação com as juntas segue estável
+        for (int i = 0; i < 240; ++i) t.world->update(Real(1) / Real(60));
+        CHECK(t.world->getBody(A).getTransform().position.isFinite());
+        CHECK(t.world->getBody(A).getTransform().position.y > -1);   // preso: não caiu pelo chão
+        // apagar: da última para a primeira; pivôs órfãos somem
+        CHECK(destroyLastJoint(t) && jointCount(t) == 4);
+        const std::size_t before2 = t.bodies.size();
+        CHECK(destroyLastJoint(t) && jointCount(t) == 3 && t.bodies.size() == before2 - 1);   // junta do pivô
+        while (jointCount(t) > 0) CHECK(destroyLastJoint(t));
+        CHECK(t.links.empty() && !destroyLastJoint(t));
+        // salvar com juntas e pivô: ida e volta
+        CHECK(createJoint(t, w) && createJoint(t, jp));
+        const std::string txt = serializeScene(t);
+        Scene back;
+        CHECK(parseScene(txt, back, err));
+        CHECK(jointCount(back) == jointCount(t) && back.bodies.size() == t.bodies.size());
+        // apagar um corpo remove as juntas dele
+        CHECK(jointCount(t) == 2);
+        CHECK(deleteBody(t, A) && jointCount(t) == 0);
+    }
+    // --- pointOnRay ---------------------------------------------------------------------------------------
+    {
+        Scene t = makeEmptyScene(true);
+        Vector3 pt;
+        CHECK(pointOnRay(t, Vector3(1, 5, 2), Vector3(0, -1, 0), pt) && near(pt.x, 1) && near(pt.y, 0) && near(pt.z, 2));
+        Scene e = makeEmptyScene(false);   // sem chão: cai no plano y = 0
+        CHECK(pointOnRay(e, Vector3(0, 4, 0), Vector3(1, -1, 0), pt) && near(pt.y, 0) && near(pt.x, 4));
+        CHECK(!pointOnRay(e, Vector3(0, 4, 0), Vector3(0, 1, 0), pt));
+        CHECK(!pointOnRay(e, Vector3(0, 4, 0), Vector3(), pt));
+    }
+}
+
+// =================================================================================================
+// V15a — fecho convexo, leitor .obj/.mtl, forma de colisão do modelo
+// =================================================================================================
+namespace {
+
+struct Lcg {   // gerador determinístico simples
+    unsigned s;
+    explicit Lcg(unsigned seed) : s(seed) {}
+    double next() { s = s * 1664525u + 1013904223u; return static_cast<double>((s >> 8) & 0xFFFFFF) / 16777216.0; }
+    double range(double lo, double hi) { return lo + (hi - lo) * next(); }
+};
+
+/// Cubo de aresta 1 com centro em (cx, cy, cz).
+std::vector<physics::Vector3> cubeCorners(double cx = 0, double cy = 0, double cz = 0, double half = 0.5) {
+    std::vector<physics::Vector3> v;
+    for (int i = 0; i < 8; ++i)
+        v.emplace_back(static_cast<physics::Real>(cx + ((i & 1) ? half : -half)), static_cast<physics::Real>(cy + ((i & 2) ? half : -half)),
+                       static_cast<physics::Real>(cz + ((i & 4) ? half : -half)));
+    return v;
+}
+
+int hullEdges(const viewer::ConvexHull& h) {
+    int e = 0;
+    for (const auto& f : h.faces) e += static_cast<int>(f.size());
+    return e / 2;
+}
+
+/// Todo ponto está atrás (ou sobre) de todos os planos das faces, e a normal aponta para fora do centro.
+bool hullContains(const viewer::ConvexHull& h, const std::vector<physics::Vector3>& pts, double tol) {
+    physics::Vector3 c;
+    for (const auto& v : h.vertices) c += v;
+    c = c / static_cast<physics::Real>(h.vertices.size());
+    for (const auto& f : h.faces) {
+        physics::Vector3 n;   // normal de Newell
+        for (std::size_t i = 0; i < f.size(); ++i) {
+            const physics::Vector3& a = h.vertices[static_cast<std::size_t>(f[i])];
+            const physics::Vector3& b = h.vertices[static_cast<std::size_t>(f[(i + 1) % f.size()])];
+            n.x += (a.y - b.y) * (a.z + b.z);
+            n.y += (a.z - b.z) * (a.x + b.x);
+            n.z += (a.x - b.x) * (a.y + b.y);
+        }
+        if (n.lengthSquared() <= 0) return false;
+        n = n.normalized();
+        const double d = static_cast<double>(n.dot(h.vertices[static_cast<std::size_t>(f[0])]));
+        if (static_cast<double>(n.dot(c)) > d) return false;   // normal para dentro
+        for (const auto& p : pts)
+            if (static_cast<double>(n.dot(p)) - d > tol) return false;
+    }
+    return true;
+}
+
+std::string cubeObj(const char* extra = "") {
+    return std::string("# cubo\nv -1 -1 -1\nv 1 -1 -1\nv 1 1 -1\nv -1 1 -1\nv -1 -1 1\nv 1 -1 1\nv 1 1 1\nv -1 1 1\n"
+                       "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 1\n") + extra +
+           "f 1/1/1 4/4/1 3/3/1 2/2/1\nf 5/1 6/2 7/3 8/4\nf 1/1 2/2 6/3 5/4\nf 4 8 7 3\nf 2/1 3/2 7/3 6/4\nf 1 5 8 4\n";
+}
+
+/// Toro (côncavo) com malha fechada: R = raio maior, r = raio do tubo.
+std::string torusObj(double R, double r, int nu, int nv) {
+    std::string t = "o toro\n";
+    char buf[96];
+    for (int i = 0; i < nu; ++i)
+        for (int j = 0; j < nv; ++j) {
+            const double u = 6.283185307179586 * i / nu, v = 6.283185307179586 * j / nv;
+            std::snprintf(buf, sizeof buf, "v %.6f %.6f %.6f\n", (R + r * std::cos(v)) * std::cos(u), r * std::sin(v), (R + r * std::cos(v)) * std::sin(u));
+            t += buf;
+        }
+    for (int i = 0; i < nu; ++i)
+        for (int j = 0; j < nv; ++j) {
+            const int a = i * nv + j + 1, b = ((i + 1) % nu) * nv + j + 1, c = ((i + 1) % nu) * nv + (j + 1) % nv + 1, d = i * nv + (j + 1) % nv + 1;
+            std::snprintf(buf, sizeof buf, "f %d %d %d %d\n", a, d, c, b);
+            t += buf;
+        }
+    return t;
+}
+
+} // namespace
+
+static void testModelImport() {
+    using namespace physics;
+    using viewer::ConvexHull;
+    std::string err;
+
+    // --- fecho: cubo + muitos pontos internos -----------------------------------------------------------------------
+    {
+        Lcg rng(7);
+        std::vector<Vector3> pts = cubeCorners();
+        for (int i = 0; i < 1000; ++i)
+            pts.emplace_back(static_cast<Real>(rng.range(-0.49, 0.49)), static_cast<Real>(rng.range(-0.49, 0.49)), static_cast<Real>(rng.range(-0.49, 0.49)));
+        ConvexHull h;
+        CHECK(viewer::buildConvexHull(pts, h, &err));
+        CHECK(h.vertices.size() == 8 && h.faces.size() == 6 && h.triangleCount == 12);
+        for (const auto& f : h.faces) CHECK(f.size() == 4);   // faces quadradas refeitas
+        CHECK(static_cast<int>(h.vertices.size()) - hullEdges(h) + static_cast<int>(h.faces.size()) == 2);   // Euler
+        for (std::size_t i = 0; i < h.vertices.size(); ++i) CHECK(h.vertices[i].nearlyEqual(pts[static_cast<std::size_t>(h.sourceIndex[i])], Real(0)));
+        CHECK(hullContains(h, pts, 1e-6));
+        const PolyhedronShape shape(h.vertices, h.faces);   // o motor aceita
+        CHECK(near(static_cast<float>(shape.getVolume()), 1.0f, 1e-4f));
+        ConvexHull tri;
+        CHECK(viewer::buildConvexHull(pts, tri, &err, false) && tri.faces.size() == 12);
+        for (const auto& f : tri.faces) CHECK(f.size() == 3);
+        ConvexHull again;   // determinismo
+        CHECK(viewer::buildConvexHull(pts, again, &err) && again.faces == h.faces && again.sourceIndex == h.sourceIndex);
+    }
+    // --- cubo girado (coplanaridade com arredondamento), grande, pequeno e longe da origem --------------------------
+    {
+        const double halfs[3] = {0.0005, 0.5, 300.0};
+        for (double half : halfs) {
+            const Quaternion q = Quaternion::fromAxisAngle(Vector3(1, 2, 3).normalized(), Real(0.7));
+            std::vector<Vector3> pts;
+            for (const Vector3& c : cubeCorners(0, 0, 0, half)) pts.push_back(q.rotate(c) + Vector3(Real(half * 3), Real(-half * 2), Real(half)));
+            ConvexHull h;
+            CHECK(viewer::buildConvexHull(pts, h, &err));
+            CHECK(h.vertices.size() == 8 && h.faces.size() == 6);
+            const PolyhedronShape shape(h.vertices, h.faces);
+            CHECK(shape.getVolume() > 0);
+        }
+        std::vector<Vector3> far = cubeCorners(1000, -2000, 500);   // longe da origem
+        ConvexHull h;
+        CHECK(viewer::buildConvexHull(far, h, &err) && h.vertices.size() == 8);
+    }
+    // --- pontos sobre a esfera: todos são vértices, fecho convexo e aceito pelo motor ----------------------------------
+    {
+        Lcg rng(11);
+        std::vector<Vector3> pts;
+        for (int i = 0; i < 600; ++i) {
+            Vector3 d(static_cast<Real>(rng.range(-1, 1)), static_cast<Real>(rng.range(-1, 1)), static_cast<Real>(rng.range(-1, 1)));
+            if (d.lengthSquared() < Real(0.01)) continue;
+            pts.push_back(d.normalized() * Real(2));
+        }
+        ConvexHull h;
+        CHECK(viewer::buildConvexHull(pts, h, &err));
+        CHECK(h.vertices.size() > 100 && static_cast<int>(h.vertices.size()) - hullEdges(h) + static_cast<int>(h.faces.size()) == 2);
+        CHECK(hullContains(h, pts, 1e-4));
+        const PolyhedronShape shape(h.vertices, h.faces);
+        const double v = static_cast<double>(shape.getVolume());
+        CHECK(v > 0.9 * 4.0 / 3.0 * 3.14159265 * 8.0 && v < 4.0 / 3.0 * 3.14159265 * 8.0 + 1e-3);
+    }
+    // --- nuvem aleatória (muitos pontos internos) e pontos duplicados --------------------------------------------------
+    {
+        Lcg rng(3);
+        std::vector<Vector3> pts;
+        for (int i = 0; i < 3000; ++i)
+            pts.emplace_back(static_cast<Real>(rng.range(-3, 3)), static_cast<Real>(rng.range(-1, 1)), static_cast<Real>(rng.range(-2, 2)));
+        for (int i = 0; i < 200; ++i) pts.push_back(pts[static_cast<std::size_t>(i)]);   // duplicados
+        ConvexHull h;
+        CHECK(viewer::buildConvexHull(pts, h, &err) && hullContains(h, pts, 1e-4));
+        CHECK(static_cast<int>(h.vertices.size()) - hullEdges(h) + static_cast<int>(h.faces.size()) == 2);
+        const PolyhedronShape shape(h.vertices, h.faces);
+        CHECK(shape.getVolume() > 0);
+    }
+    // --- entradas degeneradas ----------------------------------------------------------------------------------------------
+    {
+        ConvexHull h;
+        const Real nan = std::numeric_limits<Real>::quiet_NaN();
+        CHECK(!viewer::buildConvexHull({}, h, &err) && err.find("4 pontos") != std::string::npos);
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0)}, h, &err));
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, 0)}, h, &err) &&
+              err.find("coplanares") != std::string::npos);                       // quadrado plano
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(2, 0, 0), Vector3(3, 0, 0)}, h, &err) &&
+              err.find("colineares") != std::string::npos);
+        CHECK(!viewer::buildConvexHull({Vector3(1, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 1), Vector3(1, 1, 1)}, h, &err));
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0), Vector3(0, 0, 0)}, h, &err));
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, nan)}, h, &err) &&
+              err.find("finito") != std::string::npos);
+        CHECK(h.vertices.empty() && h.faces.empty());   // falha deixa a saída limpa
+        // quase coplanar (espessura 1e-9) também é recusado
+        CHECK(!viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(1, 1, Real(1e-9))}, h, &err));
+        // um tetraedro mínimo funciona
+        CHECK(viewer::buildConvexHull({Vector3(0, 0, 0), Vector3(1, 0, 0), Vector3(0, 1, 0), Vector3(0, 0, 1)}, h, &err) && h.faces.size() == 4);
+    }
+
+    // --- leitor .obj ---------------------------------------------------------------------------------------------------------------
+    {
+        viewer::ObjModel m;
+        CHECK(viewer::parseObj(cubeObj("usemtl vermelho\nmtllib cubo.mtl\n"), m, err));
+        CHECK(m.positions.size() == 8 && m.uvs.size() == 4 && m.triangles.size() == 12);   // 6 quadrados em leque
+        CHECK(m.materials.size() == 1 && m.materials[0].name == "vermelho" && m.mtlLibs.size() == 1 && m.mtlLibs[0] == "cubo.mtl");
+        CHECK(m.triangles[0].material == 0 && m.triangles[0].t[0] == 0 && m.triangles[2].t[0] == 0);
+        Vec3f lo, hi;
+        CHECK(viewer::objBounds(m, lo, hi) && near(lo, Vec3f{-1, -1, -1}) && near(hi, Vec3f{1, 1, 1}));
+        viewer::ObjModel neg;   // índices negativos, CRLF, comentário na linha, espaços extras
+        CHECK(viewer::parseObj("v 0 0 0 # origem\r\nv 1 0 0\r\nv 0 1 0\r\nf -3 -2 -1\r\n", neg, err) && neg.triangles.size() == 1 && neg.triangles[0].p[0] == 0 &&
+              neg.triangles[0].p[2] == 2);
+        viewer::ObjModel poly;   // polígono de 5 lados -> 3 triângulos
+        CHECK(viewer::parseObj("v 0 0 0\nv 1 0 0\nv 2 1 0\nv 1 2 0\nv 0 1 0\nf 1 2 3 4 5\n", poly, err) && poly.triangles.size() == 3);
+        struct Bad { const char* what; std::string text; const char* expect; };
+        const Bad bads[] = {
+            {"vazio", "", "nao tem vertices"},
+            {"so vertices", "v 0 0 0\nv 1 0 0\nv 0 1 0\n", "nao tem faces"},
+            {"v curto", "v 1 2\n", "linha 1: 'v' precisa"},
+            {"numero", "v 1 2 abc\n", "numero invalido"},
+            {"nan", "v 1 2 nan\n", "numero invalido"},
+            {"inf", "v 1 inf 3\n", "numero invalido"},
+            {"enorme", "v 1 2 1e9\n", "fora do limite"},
+            {"face curta", "v 0 0 0\nv 1 0 0\nf 1 2\n", "'f' precisa"},
+            {"indice zero", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 0 1 2\n", "fora do intervalo"},
+            {"indice alto", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 4\n", "fora do intervalo"},
+            {"negativo alto", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf -4 1 2\n", "fora do intervalo"},
+            {"uv alto", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1/1 2/1 3/1\n", "textura"},
+            {"indice lixo", "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 x\n", "indice invalido"},
+            {"comando", "v 0 0 0\nxyz 1\n", "comando desconhecido"},
+            {"usemtl vazio", "v 0 0 0\nusemtl\n", "sem nome"},
+        };
+        for (const Bad& b : bads) {
+            viewer::ObjModel x;
+            x.positions.push_back({1, 2, 3});   // deve ser limpo na falha
+            const bool ok = viewer::parseObj(b.text, x, err);
+            CHECK(!ok && err.find(b.expect) != std::string::npos && x.positions.empty());
+            if (ok || err.find(b.expect) == std::string::npos) std::printf("  caso '%s': '%s'\n", b.what, err.c_str());
+        }
+        viewer::ObjModel line3;   // número da linha na mensagem
+        CHECK(!viewer::parseObj("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 9\n", line3, err) && err.find("linha 4") != std::string::npos);
+    }
+    // --- leitor .mtl e carregamento do disco ---------------------------------------------------------------------------
+    {
+        std::vector<viewer::ObjMaterial> mats;
+        CHECK(viewer::parseMtl("# x\nnewmtl a\nKd 0.5 0.25 2\nmap_Kd tex.png\nnewmtl b b\nKa 1 1 1\nmap_Kd -s 1 1 1 sub/t2.png\n", mats, err));
+        CHECK(mats.size() == 2 && mats[0].diffuseMap == "tex.png" && near(mats[0].kd[0], 0.5f) && near(mats[0].kd[2], 1.0f));   // Kd limitado a [0,1]
+        CHECK(mats[1].name == "b b" && mats[1].diffuseMap == "sub/t2.png");
+        std::vector<viewer::ObjMaterial> bad;
+        CHECK(!viewer::parseMtl("Kd 1 1 1\n", bad, err) && err.find("antes de 'newmtl'") != std::string::npos);
+        CHECK(!viewer::parseMtl("newmtl a\nKd 1 1\n", bad, err));
+
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / "viewer_v15a_test";
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        auto put = [&](const char* name, const std::string& text) { std::FILE* f = std::fopen((dir / name).string().c_str(), "wb"); std::fputs(text.c_str(), f); std::fclose(f); };
+        put("cubo.obj", cubeObj("mtllib cubo.mtl\nusemtl madeira\n"));
+        put("cubo.mtl", "newmtl madeira\nKd 0.8 0.6 0.4\nmap_Kd madeira.png\nnewmtl nao_usado\nKd 1 0 0\n");
+        viewer::ObjModel m;
+        std::string warn;
+        CHECK(viewer::loadObjFile((dir / "cubo.obj").string(), m, err, &warn));
+        CHECK(m.name == "cubo" && m.materials.size() == 1 && m.materials[0].diffuseMap == "madeira.png" && near(m.materials[0].kd[1], 0.6f) && warn.empty());
+        put("inseguro.obj", cubeObj("mtllib ../fora.mtl\nusemtl m\n"));
+        CHECK(viewer::loadObjFile((dir / "inseguro.obj").string(), m, err, &warn) && warn.find("inseguro") != std::string::npos);
+        put("semmtl.obj", cubeObj("mtllib nao_existe.mtl\nusemtl m\n"));
+        CHECK(viewer::loadObjFile((dir / "semmtl.obj").string(), m, err, &warn) && warn.find("sem nao_existe.mtl") != std::string::npos && m.materials[0].diffuseMap.empty());
+        put("texinsegura.obj", cubeObj("mtllib t.mtl\nusemtl m\n"));
+        put("t.mtl", "newmtl m\nmap_Kd C:/x.png\n");
+        CHECK(viewer::loadObjFile((dir / "texinsegura.obj").string(), m, err, &warn) && m.materials[0].diffuseMap.empty() && warn.find("textura recusada") != std::string::npos);
+        put("ruim.obj", "v 0 0 0\nf 1 1 1\nxx\n");
+        CHECK(!viewer::loadObjFile((dir / "ruim.obj").string(), m, err) && err.find("ruim.obj") != std::string::npos && err.find("linha 3") != std::string::npos);
+        CHECK(!viewer::loadObjFile((dir / "nao_existe.obj").string(), m, err) && err.find("nao encontrado") != std::string::npos);
+        CHECK(!viewer::loadObjFile(dir.string(), m, err));   // pasta
+        fs::remove_all(dir);
+    }
+
+    // --- forma de colisão -------------------------------------------------------------------------------------------------------------
+    {
+        viewer::ObjModel cube;
+        CHECK(viewer::parseObj(cubeObj(), cube, err));
+        CHECK(near(viewer::autoScale(cube, 1.0f), 0.5f));
+        CHECK(near(viewer::autoScale(cube, 0.0f), 1.0f) && near(viewer::autoScale(cube, std::numeric_limits<float>::quiet_NaN()), 1.0f));
+        viewer::ImportedShape is;
+        CHECK(viewer::makeImportedShape(cube, 0.5f, is, err));   // cubo de aresta 1 m
+        CHECK(is.shape && is.hullVertices == 8 && is.hullFaces == 6 && is.hullTriangles == 12 && is.modelVertices == 8);
+        CHECK(near(static_cast<float>(is.shape->getVolume()), 1.0f, 1e-4f) && !is.concave);
+        CHECK(near(static_cast<float>(is.shape->getCentroid().length()), 0.0f, 1e-5f));
+        CHECK(near(static_cast<float>(is.modelVolume), 1.0f, 1e-3f));
+        // modelo deslocado: o deslocamento (offset) leva o centroide para a origem
+        viewer::ObjModel moved = cube;
+        for (Vec3f& v : moved.positions) { v.x += 10.0f; v.y -= 4.0f; }
+        CHECK(viewer::makeImportedShape(moved, 0.5f, is, err));
+        CHECK(near(static_cast<float>(is.offset.x), 5.0f, 1e-3f) && near(static_cast<float>(is.offset.y), -2.0f, 1e-3f) && near(static_cast<float>(is.shape->getCentroid().length()), 0.0f, 1e-5f));
+        // limites
+        CHECK(!viewer::makeImportedShape(cube, 0.0f, is, err) && !is.shape);
+        CHECK(!viewer::makeImportedShape(cube, std::numeric_limits<float>::quiet_NaN(), is, err));
+        CHECK(!viewer::makeImportedShape(cube, 1000.0f, is, err) && err.find("tamanho final") != std::string::npos);
+        CHECK(!viewer::makeImportedShape(cube, 0.001f, is, err));
+        viewer::ObjModel flat;   // placa sem volume
+        CHECK(viewer::parseObj("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n", flat, err));
+        CHECK(!viewer::makeImportedShape(flat, 1.0f, is, err) && err.find("fecho convexo") != std::string::npos);
+        // toro: côncavo; o fecho é um disco grosso
+        viewer::ObjModel torus;
+        CHECK(viewer::parseObj(torusObj(1.0, 0.3, 24, 12), torus, err) && torus.triangles.size() == 24 * 12 * 2);
+        CHECK(viewer::makeImportedShape(torus, 1.0f, is, err) && is.concave && is.modelVolume < 0.9 * is.hullVolume);
+        // o buraco do toro é preenchido: um objeto no centro NÃO cai pelo buraco (colide com o fecho)
+        PhysicsWorld w;
+        RigidBodyDesc gd;
+        gd.type = BodyType::Static;
+        gd.shape = std::make_shared<BoxShape>(Vector3(10, Real(0.5), 10));
+        gd.transform = Transform(Vector3(0, Real(-0.5), 0));
+        w.createBody(gd);
+        RigidBodyDesc td;
+        td.shape = is.shape;
+        td.mass = 2;
+        td.transform = Transform(Vector3(0, 3, 0));
+        const BodyId tid = w.createBody(td);
+        RigidBodyDesc sd;
+        sd.shape = std::make_shared<SphereShape>(Real(0.2));
+        sd.mass = 1;
+        sd.transform = Transform(Vector3(0, 6, 0));
+        const BodyId sid = w.createBody(sd);
+        for (int i = 0; i < 600; ++i) w.update(Real(1) / Real(60));
+        CHECK(w.getBody(sid).getTransform().position.y > Real(0.5));   // apoiada no "toro cheio" (altura do tubo 0,3·2 = 0,6)
+        CHECK(w.getBody(tid).getTransform().position.isFinite() && w.getBody(tid).getTransform().position.y > Real(0.1));
+        // cubo importado e girado cai e repousa sobre uma face (fusão coplanar -> contato estável)
+        viewer::ObjModel big;
+        CHECK(viewer::parseObj(cubeObj(), big, err) && viewer::makeImportedShape(big, 1.0f, is, err));   // aresta 2 m
+        PhysicsWorld w2;
+        w2.createBody(gd);
+        RigidBodyDesc cd;
+        cd.shape = is.shape;
+        cd.mass = 4;
+        cd.transform = Transform(Vector3(0, 5, 0), Quaternion::fromAxisAngle(Vector3(1, 1, 0.3f).normalized(), Real(0.8)));
+        const BodyId cid = w2.createBody(cd);
+        for (int i = 0; i < 600; ++i) w2.update(Real(1) / Real(60));
+        CHECK(near(static_cast<float>(w2.getBody(cid).getTransform().position.y), 1.0f, 0.03f));
+        CHECK(w2.getBody(cid).getLinearVelocity().length() < Real(0.05));
+    }
+    // --- os modelos de exemplo da pasta models/ -------------------------------------------------------------------------
+#ifdef VIEWER_MODELS_DIR
+    {
+        const std::string dir = VIEWER_MODELS_DIR;
+        viewer::ObjModel m;
+        std::string warn;
+        viewer::ImportedShape is;
+        CHECK(viewer::loadObjFile(dir + "/cubo.obj", m, err, &warn) && warn.empty() && m.triangles.size() == 12);
+        CHECK(m.materials.size() == 1 && m.materials[0].diffuseMap == "xadrez.png" && std::filesystem::exists(dir + "/xadrez.png"));
+        CHECK(viewer::makeImportedShape(m, 1.0f, is, err) && is.hullVertices == 8 && is.hullFaces == 6 && !is.concave);
+        CHECK(viewer::loadObjFile(dir + "/esfera.obj", m, err, &warn) && warn.empty() && m.triangles.size() == 320 && m.uvs.size() == m.positions.size());
+        CHECK(m.materials[0].diffuseMap == "listras.png" && std::filesystem::exists(dir + "/listras.png"));
+        CHECK(viewer::makeImportedShape(m, 1.0f, is, err) && is.hullVertices == 162 && !is.concave);
+        CHECK(is.shape->getVolume() > Real(0.5) && is.shape->getVolume() < Real(0.5236));   // 4/3·pi·0,5³ = 0,5236
+        CHECK(viewer::loadObjFile(dir + "/toro.obj", m, err, &warn) && viewer::makeImportedShape(m, 1.0f, is, err) && is.concave);
+    }
+#endif
+}
+
 int main() {
     testMatchesEngine();
     testKnownRotation();
@@ -1359,6 +2008,9 @@ int main() {
     testContactTracker();
     testCollisionScenes();
     testSceneFile();
+    testDockLayout();
+    testSceneEditor();
+    testModelImport();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

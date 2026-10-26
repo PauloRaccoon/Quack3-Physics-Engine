@@ -63,7 +63,7 @@ Quaternion orientationFromAxisAngle(const Vector3& axis, Real angle, bool* ok) {
 BodyId spawnBody(Scene& scene, const SpawnParams& p) {
     if (!scene.world) return kInvalidBodyId;
     if (!std::isfinite(p.size) || !std::isfinite(p.mass) || !std::isfinite(p.friction) || !std::isfinite(p.restitution) ||
-        !p.position.isFinite() || !p.orientation.isFinite() || !p.velocity.isFinite() || !p.angularVelocity.isFinite())
+        !p.boxScale.isFinite() || !p.position.isFinite() || !p.orientation.isFinite() || !p.velocity.isFinite() || !p.angularVelocity.isFinite())
         return kInvalidBodyId;
     const Real n = p.orientation.norm();
     if (!(n > Real(1e-6))) return kInvalidBodyId;
@@ -74,10 +74,18 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
     try {
         switch (p.kind) {
             case SpawnKind::Box:
-                d.shape = std::make_shared<BoxShape>(Vector3(size, size, size) * Real(0.5));
+            {
+                // V14: aresta por eixo = size · escala, limitada (a V1 usava só a aresta única `size`).
+                auto edge = [&](Real scale) {
+                    return clampTo(size * clampTo(scale, spawnlimits::kMinBoxScale, spawnlimits::kMaxBoxScale),
+                                   spawnlimits::kMinBoxExtent, spawnlimits::kMaxBoxExtent);
+                };
+                const Vector3 half(edge(p.boxScale.x) * Real(0.5), edge(p.boxScale.y) * Real(0.5), edge(p.boxScale.z) * Real(0.5));
+                d.shape = std::make_shared<BoxShape>(half);
                 sb.kind = ShapeKind::Box;
-                sb.halfExtents = Vec3f{static_cast<float>(size) * 0.5f, static_cast<float>(size) * 0.5f, static_cast<float>(size) * 0.5f};
+                sb.halfExtents = Vec3f{static_cast<float>(half.x), static_cast<float>(half.y), static_cast<float>(half.z)};
                 break;
+            }
             case SpawnKind::Sphere:
                 d.shape = std::make_shared<SphereShape>(size * Real(0.5));
                 sb.kind = ShapeKind::Sphere;
@@ -106,8 +114,12 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
         pos.y = clampTo(pos.y, -spawnlimits::kMaxCoordinate, spawnlimits::kMaxCoordinate);
         pos.z = clampTo(pos.z, -spawnlimits::kMaxCoordinate, spawnlimits::kMaxCoordinate);
         d.transform = Transform(pos, p.orientation.normalized());
-        d.linearVelocity = clampVec(p.velocity, spawnlimits::kMaxLinearSpeed);
-        d.angularVelocity = clampVec(p.angularVelocity, spawnlimits::kMaxAngularSpeed);
+        if (p.isStatic) {
+            d.type = BodyType::Static;   // V14: massa e velocidades não se aplicam
+        } else {
+            d.linearVelocity = clampVec(p.velocity, spawnlimits::kMaxLinearSpeed);
+            d.angularVelocity = clampVec(p.angularVelocity, spawnlimits::kMaxAngularSpeed);
+        }
         d.friction = clampTo(p.friction, Real(0), Real(2));
         d.restitution = clampTo(p.restitution, Real(0), Real(1));
         d.angularDamping = Real(0);
@@ -119,6 +131,10 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
     sb.r = kColors[ci][0];
     sb.g = kColors[ci][1];
     sb.b = kColors[ci][2];
+    if (p.isStatic) {   // cenário: cinza-azulado, como o chão
+        sb.isStatic = true;
+        sb.r = 150; sb.g = 156; sb.b = 170;
+    }
     scene.bodies.push_back(sb);
     return sb.id;
 }
