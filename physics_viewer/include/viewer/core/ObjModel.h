@@ -32,6 +32,7 @@ struct ObjMaterial {
     std::string name;
     std::string diffuseMap;                   ///< map_Kd (caminho relativo ao .mtl); vazio = sem textura
     float kd[3] = {0.8f, 0.8f, 0.8f};         ///< cor difusa (0..1)
+    bool hasKd = false;                       ///< o .mtl definiu Kd (senão a janela usa a cor do corpo)
 };
 
 struct ObjTriangle {

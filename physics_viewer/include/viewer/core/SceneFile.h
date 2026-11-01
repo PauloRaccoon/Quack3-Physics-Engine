@@ -29,6 +29,7 @@
 //     allow_sleep 1
 //     color 240 150 60
 //     focus                      # o corpo do painel do quatérnio (no máximo um)
+//     model 0.5 0.1 0.2 0.0 cubo.obj   # V15b, opcional: escala, deslocamento, arquivo (relativo a models/)
 //   end
 //   joint hinge 1 2  ax ay az  dx dy dz  collide      # âncora (mundo), eixo, colide 0|1
 //   joint ballsocket 1 2  ax ay az  collide
@@ -51,11 +52,11 @@ namespace viewer {
 
 namespace scenefile {
 constexpr int kVersion = 1;
-constexpr std::size_t kMaxBytes = 8u * 1024u * 1024u;
+constexpr std::size_t kMaxBytes = 32u * 1024u * 1024u;   // V15b: era 8 MB; fechos de modelos importados são grandes
 constexpr int kMaxBodies = 2000;
 constexpr int kMaxJoints = 2000;
-constexpr int kMaxPolyVertices = 256;
-constexpr int kMaxPolyFaces = 512;
+constexpr int kMaxPolyVertices = 4096;   // V15b: = modellimits::kMaxHullVertices
+constexpr int kMaxPolyFaces = 8192;
 constexpr int kMaxFaceVertices = 32;
 constexpr std::size_t kMaxNameLength = 64;
 constexpr const char* kExtension = ".scene";
@@ -66,11 +67,17 @@ constexpr const char* kExtension = ".scene";
 std::string serializeScene(const Scene& scene);
 
 /// Texto -> cena. `out` só é tocado se devolver true; senão `error` diz o que houve ("linha N: ...").
-bool parseScene(const std::string& text, Scene& out, std::string& error);
+///
+/// V15b: um bloco pode ter `model <escala> <ox> <oy> <oz> <arquivo.obj>` logo depois de `shape poly` (o fecho
+/// continua sendo a forma de colisão). Com `modelDir`, o `.obj` é lido dessa pasta para desenhar a malha com
+/// textura; se faltar o arquivo (ou `modelDir` vazio) o corpo carrega como poliedro comum e `warning` avisa.
+bool parseScene(const std::string& text, Scene& out, std::string& error, const std::string& modelDir = std::string(),
+                std::string* warning = nullptr);
 
 /// Arquivos. `path` é o caminho completo; as pastas que faltam são criadas ao salvar.
 bool saveSceneFile(const Scene& scene, const std::string& path, std::string& error);
-bool loadSceneFile(const std::string& path, Scene& out, std::string& error);
+bool loadSceneFile(const std::string& path, Scene& out, std::string& error, const std::string& modelDir = std::string(),
+                   std::string* warning = nullptr);
 
 /// Nomes (sem a extensão) dos `.scene` de uma pasta, em ordem alfabética. Pasta inexistente: lista vazia.
 std::vector<std::string> listSceneFiles(const std::string& dir);

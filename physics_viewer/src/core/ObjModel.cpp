@@ -194,6 +194,7 @@ bool parseMtl(const std::string& text, std::vector<ObjMaterial>& out, std::strin
                     const float v = parseFloat(tk[static_cast<std::size_t>(i) + 1], lineNo, "Kd");
                     mats.back().kd[i] = std::min(1.0f, std::max(0.0f, v));
                 }
+                mats.back().hasKd = true;
             } else if (key == "map_Kd") {
                 if (mats.empty()) fail(lineNo, "'map_Kd' antes de 'newmtl'");
                 if (tk.size() < 2) fail(lineNo, "'map_Kd' sem arquivo");
@@ -259,6 +260,7 @@ bool loadObjFile(const std::string& path, ObjModel& out, std::string& error, std
                 if (used.name == d.name) {
                     used.diffuseMap = d.diffuseMap;
                     for (int i = 0; i < 3; ++i) used.kd[i] = d.kd[i];
+                    used.hasKd = d.hasKd;
                 }
     }
     for (ObjMaterial& mat : m.materials) {

@@ -72,7 +72,23 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
     SceneBody sb;
     RigidBodyDesc d;
     try {
-        switch (p.kind) {
+        if (p.model && p.model->shape) {   // V15b: modelo importado
+            sb.model = p.model;
+            const Shape& ms = *p.model->shape;
+            if (ms.getType() == ShapeType::Box) {   // V17: colisor em caixa; a malha continua sendo o modelo
+                d.shape = p.model->shape;
+                sb.kind = ShapeKind::Box;
+                const Vector3 h = static_cast<const BoxShape&>(ms).getHalfExtents();
+                sb.halfExtents = Vec3f{static_cast<float>(h.x), static_cast<float>(h.y), static_cast<float>(h.z)};
+            } else if (ms.getType() == ShapeType::Sphere) {   // V17: colisor em esfera
+                d.shape = p.model->shape;
+                sb.kind = ShapeKind::Sphere;
+                sb.radius = static_cast<float>(static_cast<const SphereShape&>(ms).getRadius());
+            } else {
+                sb.poly = std::dynamic_pointer_cast<const PolyhedronShape>(p.model->shape);
+                if (!sb.poly) return kInvalidBodyId;
+            }
+        } else switch (p.kind) {
             case SpawnKind::Box:
             {
                 // V14: aresta por eixo = size · escala, limitada (a V1 usava só a aresta única `size`).

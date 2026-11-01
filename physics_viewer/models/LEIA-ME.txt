@@ -3,3 +3,10 @@ Modelos de exemplo do physics_viewer (V15): .obj + .mtl + textura .png na MESMA 
 - esfera.obj  icosfera de raio 0,5 m (320 faces), textura listras
 - toro.obj    toro CONCAVO: desenha-se o toro, mas colide como o seu fecho convexo (o buraco e preenchido)
 Voce pode usar qualquer .obj (v, vt, f com v/vt/vn, usemtl, mtllib) e .mtl (newmtl, Kd, map_Kd); veja include/viewer/core/ObjModel.h.
+
+SEU PROPRIO MODELO (V17): arraste o arquivo .obj (ou uma pasta com .obj) para a JANELA do viewer, ou abra
+Adicionar > Forma > "modelo 3D" e cole o caminho no campo, depois "Importar". O viewer copia o .obj, o .mtl e as
+texturas que ele usa para models/<nome>/ (nada e sobrescrito) e ja seleciona o modelo na lista.
+Tambem funciona copiar a pasta do modelo para ca e apertar "Atualizar lista".
+Tipo de colisao (forma fisica): Fecho (convexo, fiel), Caixa (envolvente) ou Esfera (envolvente).
+Por enquanto so o formato .obj; .fbx/.glb/.stl nao sao lidos (converta para .obj, p. ex. no Blender: File > Export > Wavefront).

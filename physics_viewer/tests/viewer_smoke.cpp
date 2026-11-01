@@ -7,9 +7,13 @@
 //      mudar o mundo, acordar/dormir, trocar de cena) intercaladas com passos, sem NaN e sem quebrar.
 // Retorna 0 se tudo passou.
 // =============================================================================
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -20,13 +24,16 @@
 #include "viewer/core/ConvexHull.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/JointEditor.h"
+#include "viewer/core/ModelAsset.h"
 #include "viewer/core/ModelCollider.h"
+#include "viewer/core/ModelImporter.h"
 #include "viewer/core/ObjModel.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/Scene.h"
 #include "viewer/core/SceneFile.h"
 #include "viewer/core/TimeControl.h"
+#include "viewer/core/TrajectoryRecorder.h"
 #include "viewer/core/WorldEditor.h"
 
 using namespace viewer;
@@ -99,6 +106,36 @@ static void smokeAllScenes() {
     }
 }
 
+#ifdef VIEWER_MODELS_DIR
+static const char* const kModelDir = VIEWER_MODELS_DIR;
+#else
+static const char* const kModelDir = "";
+#endif
+
+/// V15b: alguns assets (cubo, esfera, toro em tamanhos diferentes) para o fuzz espalhar pela cena.
+static const std::vector<std::shared_ptr<const ModelAsset>>& modelPool() {
+    static std::vector<std::shared_ptr<const ModelAsset>> pool;
+    if (pool.empty() && kModelDir[0] != '\0') {
+        const char* files[] = {"cubo.obj", "esfera.obj", "toro.obj"};
+        const float sizes[] = {0.4f, 1.0f, 2.5f};
+        for (const char* f : files)
+            for (float sz : sizes)
+                for (int ck = 0; ck < kColliderKindCount; ++ck) {   // V17: cada tipo de colisor (fecho, caixa, esfera)
+                    auto a = std::make_shared<ModelAsset>();
+                    std::string err;
+                    if (loadModelAsset(kModelDir, f, sz, *a, err, nullptr, static_cast<ColliderKind>(ck))) pool.push_back(a);
+                }
+    }
+    return pool;
+}
+
+/// Primeiro corpo dinâmico da cena (ou inválido) — alvo do gravador no fuzz.
+static physics::BodyId nb0(const Scene& sc) {
+    for (const SceneBody& b : sc.bodies)
+        if (sc.world->isValidBody(b.id) && sc.world->getBody(b.id).isDynamic()) return b.id;
+    return physics::kInvalidBodyId;
+}
+
 static void fuzz(unsigned seed) {
     Rng r(seed);
     Scene sc = makeScene(static_cast<std::size_t>(r.pick(static_cast<int>(sceneList().size()))));
@@ -107,7 +144,9 @@ static void fuzz(unsigned seed) {
     TimeControl tc;
     const Real nan = std::numeric_limits<Real>::quiet_NaN();
     bool healthy = true;
+    TrajectoryRecorder rec;   // V16: gravador junto do fuzz (corpos criados/apagados, cena reiniciada, valores absurdos)
     for (int op = 0; op < 400; ++op) {
+        if (op % 40 == 0) rec.start(sc, r.pick(2) ? RecordTarget::AllDynamic : RecordTarget::Selected, nb0(sc));
         const int k = r.pick(18);
         const std::size_t nb = sc.bodies.size();
         const physics::BodyId any = nb ? sc.bodies[static_cast<std::size_t>(r.pick(static_cast<int>(nb)))].id : physics::kInvalidBodyId;
@@ -122,6 +161,10 @@ static void fuzz(unsigned seed) {
                 p.velocity = Vector3(r.range(-100, 100), r.range(-100, 100), r.range(-100, 100));
                 p.angularVelocity = Vector3(r.range(-50, 50), r.range(-50, 50), r.range(-50, 50));
                 if (r.pick(10) == 0) p.mass = nan;
+                if (r.pick(5) == 0 && !modelPool().empty()) {   // V15b: modelo importado (às vezes estático)
+                    p.model = modelPool()[static_cast<std::size_t>(r.pick(static_cast<int>(modelPool().size())))];
+                    p.isStatic = r.pick(4) == 0;
+                }
                 const physics::BodyId id = spawnBody(sc, p);
                 CHECK(id == physics::kInvalidBodyId || sc.world->isValidBody(id));
                 break;
@@ -150,8 +193,9 @@ static void fuzz(unsigned seed) {
                 if (r.pick(3) == 0) {   // salvar e recarregar a cena no meio da bagunça (corpos criados, editados, lançados)
                     Scene loaded;
                     std::string err;
-                    const bool ok = parseScene(serializeScene(sc), loaded, err);
+                    const bool ok = parseScene(serializeScene(sc), loaded, err, kModelDir);
                     CHECK(ok);
+                    if (!ok) std::printf("  recarga falhou: %s\n", err.c_str());
                     if (ok) {
                         tracker.reset();
                         sc = std::move(loaded);
@@ -202,10 +246,77 @@ static void fuzz(unsigned seed) {
         }
         for (int f = 0; f < 6; ++f) tc.advance(*sc.world, Real(1) / Real(60));
         tracker.update(0.1f);
+        rec.capture(sc);
         healthy = healthy && sceneHealthy(sc, tc.renderAlpha(*sc.world));
     }
     CHECK(healthy);
+    {   // o CSV de tudo que foi gravado é sempre bem formado e sem nan/inf
+        const std::string csv = rec.toCsv();
+        bool wf = csv.find("nan") == std::string::npos && csv.find("inf") == std::string::npos && !csv.empty() && csv.back() == '\n';
+        std::size_t lines = 0;
+        for (char c : csv) lines += c == '\n';
+        CHECK(wf && lines == rec.rowCount() + 1);
+    }
     sc.world->setContactListener(nullptr);
+}
+
+/// V17: fuzz do importador: arquivos .obj de lixo (linhas cortadas, índices ruins, nomes estranhos, mtl/textura
+/// inseguros). Regra: falhou -> NADA fica em models/; deu certo -> o arquivo existe, está na lista e carrega.
+static void fuzzImporter(unsigned seed) {
+    namespace fs = std::filesystem;
+    Rng r(seed);
+    const fs::path root = fs::temp_directory_path() / ("viewer_import_fuzz_" + std::to_string(seed));
+    fs::remove_all(root);
+    fs::create_directories(root / "src");
+    const std::string models = (root / "models").string();
+    int ok = 0, bad = 0;
+    for (int i = 0; i < 60; ++i) {
+        std::string txt;
+        const int kind = r.pick(6);
+        if (r.pick(2)) txt += "mtllib m" + std::to_string(r.pick(3)) + ".mtl\n";
+        if (r.pick(3) == 0) txt += "mtllib ../x.mtl\nmtllib /etc/hosts\n";
+        if (r.pick(2)) txt += "usemtl a\n";
+        const int nv = kind == 0 ? 0 : 4 + r.pick(8);
+        for (int v = 0; v < nv; ++v)
+            txt += "v " + std::to_string(r.range(-3.0f, 3.0f)) + " " + std::to_string(r.range(-3.0f, 3.0f)) + " " + std::to_string(r.range(-3.0f, 3.0f)) + "\n";
+        const int nf = kind == 1 ? 0 : 2 + r.pick(8);
+        for (int f = 0; f < nf; ++f) {
+            int a = 1 + r.pick(nv + 2), b = 1 + r.pick(nv + 2), c = 1 + r.pick(nv + 2);
+            if (kind != 2 && nv > 0) { a = 1 + r.pick(nv); b = 1 + r.pick(nv); c = 1 + r.pick(nv); }
+            txt += "f " + std::to_string(a) + " " + std::to_string(b) + " " + std::to_string(c) + "\n";
+        }
+        if (kind == 3 && !txt.empty()) txt.resize(txt.size() / 2);      // cortado no meio
+        if (kind == 4) txt += "v nan 0 0\nf 1 2 3\n";
+        const char* names[] = {"a.obj", "Meu Modelo.obj", "..obj", "x y z.OBJ", "\xc3\xa9.obj"};
+        const fs::path f = root / "src" / names[r.pick(5)];
+        { std::ofstream o(f, std::ios::binary | std::ios::trunc); o << txt; }
+        if (r.pick(2)) { std::ofstream o(root / "src" / ("m" + std::to_string(r.pick(3)) + ".mtl")); o << "newmtl a\nmap_Kd t.png\n"; }
+        std::size_t before = 0;
+        std::error_code ec;
+        if (fs::exists(models, ec)) for (const auto& e : fs::directory_iterator(models)) { (void)e; ++before; }
+        ImportResult res;
+        std::string err;
+        const bool good = importModel(f.string(), models, res, err);
+        std::size_t after = 0;
+        if (fs::exists(models, ec)) for (const auto& e : fs::directory_iterator(models)) { (void)e; ++after; }
+        if (good) {
+            ++ok;
+            CHECK(after == before + 1 && fs::exists(fs::path(models) / res.file));
+            const std::vector<std::string> list = listModelFiles(models);
+            CHECK(std::find(list.begin(), list.end(), res.file) != list.end());
+            ModelAsset a;
+            std::string e2;
+            for (int ck = 0; ck < kColliderKindCount; ++ck) {   // carregar com qualquer colisor: ou funciona, ou dá mensagem, nunca quebra
+                const bool l = loadModelAsset(models, res.file, 1.0f, a, e2, nullptr, static_cast<ColliderKind>(ck));
+                CHECK(l ? static_cast<bool>(a.shape) : !e2.empty());
+            }
+        } else {
+            ++bad;
+            CHECK(after == before && !err.empty());   // recusado: nenhum lixo
+        }
+    }
+    CHECK(ok > 3 && bad > 3);
+    fs::remove_all(root);
 }
 
 /// V15a: fuzz do fecho convexo e do leitor .obj. Nuvens de todos os tipos (bolas, planas, em linha, com
@@ -275,6 +386,7 @@ int main() {
     smokeAllScenes();
     for (unsigned seed = 1; seed <= 6; ++seed) fuzz(seed * 7919u);
     for (unsigned seed = 1; seed <= 4; ++seed) fuzzHullAndObj(seed * 104729u);
+    for (unsigned seed = 1; seed <= 3; ++seed) fuzzImporter(seed * 7727u);
     std::printf("fumaca: %d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

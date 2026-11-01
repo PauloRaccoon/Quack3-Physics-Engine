@@ -8,6 +8,7 @@
 #include "physics/common/Types.h"
 #include "physics/math/Quaternion.h"
 #include "physics/math/Vector3.h"
+#include "viewer/core/ModelAsset.h"
 #include "viewer/core/Scene.h"
 
 namespace viewer {
@@ -49,6 +50,9 @@ struct SpawnParams {
     bool isStatic = false;
     /// V14: só para Box. Aresta de cada eixo = size · boxScale (escala limitada a [0,1; 10], aresta a [0,05; 40] m).
     physics::Vector3 boxScale = physics::Vector3(1, 1, 1);
+    /// V15b: se definido, o corpo usa a forma de colisão (fecho) deste modelo importado e é desenhado com a malha
+    /// dele; `kind`, `size` e `boxScale` são ignorados (o tamanho já está na escala do asset).
+    std::shared_ptr<const ModelAsset> model;
 };
 
 /// Quatérnio (w, x, y, z) -> unitário. Norma ~0 ou não finito: identidade e `ok = false`.

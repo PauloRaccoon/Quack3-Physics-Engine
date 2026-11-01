@@ -16,6 +16,8 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 
@@ -27,13 +29,17 @@
 #include "viewer/core/DockLayout.h"
 #include "viewer/core/Interaction.h"
 #include "viewer/core/JointEditor.h"
+#include "viewer/core/ModelAsset.h"
 #include "viewer/core/ModelCollider.h"
+#include "viewer/core/ModelImporter.h"
+#include "viewer/core/PanelMetrics.h"
 #include "viewer/core/ObjModel.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
 #include "viewer/core/WorldEditor.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
+#include "viewer/core/TrajectoryRecorder.h"
 #include "viewer/core/Scene.h"
 #include "viewer/core/SceneFile.h"
 #include "viewer/core/ViewerMath.h"
@@ -1991,6 +1997,436 @@ static void testModelImport() {
 #endif
 }
 
+// =================================================================================================
+// V15b — modelo importado na cena: asset, malha para desenhar, spawn, .scene
+// =================================================================================================
+static void testModelScene() {
+    {   // fecho com vértices demais (modelo muito detalhado): recusa com mensagem, sem forma
+        Lcg rng(5);
+        std::string obj;
+        char buf[96];
+        for (int i = 0; i < 20000; ++i) {
+            double x = rng.range(-1, 1), y = rng.range(-1, 1), z = rng.range(-1, 1);
+            const double l = std::sqrt(x * x + y * y + z * z);
+            if (l < 0.1) { x = 1; y = z = 0; } else { x /= l; y /= l; z /= l; }
+            std::snprintf(buf, sizeof buf, "v %.6f %.6f %.6f\n", x, y, z);
+            obj += buf;
+        }
+        for (int i = 1; i + 2 <= 20000; i += 3) { std::snprintf(buf, sizeof buf, "f %d %d %d\n", i, i + 1, i + 2); obj += buf; }
+        viewer::ObjModel m;
+        std::string e;
+        viewer::ImportedShape is;
+        const bool big = viewer::parseObj(obj, m, e) && !viewer::makeImportedShape(m, 1.0f, is, e);
+        CHECK(big && (e.find("fecho grande demais") != std::string::npos || e.find("instavel") != std::string::npos) && !is.shape);   // em float o fecho de 20 mil pontos pode ser recusado por instabilidade
+        if (!big || e.find("fecho grande") == std::string::npos) std::printf("  fecho de 20000 pontos: %s\n", e.c_str());
+    }
+#ifdef VIEWER_MODELS_DIR
+    using namespace physics;
+    const std::string dir = VIEWER_MODELS_DIR;
+    std::string err, warn;
+    // --- lista e carregamento -------------------------------------------------------------------------------------
+    {
+        const std::vector<std::string> files = viewer::listModelFiles(dir);
+        CHECK(files.size() == 3 && files[0] == "cubo.obj" && files[1] == "esfera.obj" && files[2] == "toro.obj");   // ordem alfabética
+        CHECK(viewer::listModelFiles(dir + "/nao_existe").empty());
+        viewer::ModelAsset a;
+        CHECK(viewer::loadModelAsset(dir, "cubo.obj", 2.0f, a, err, &warn));
+        CHECK(near(a.scale, 2.0f) && a.shape && a.hullVertices == 8 && a.hullFaces == 6 && a.file == "cubo.obj" && !a.concave);
+        CHECK(near(static_cast<float>(a.shape->getVolume()), 8.0f, 1e-3f));   // cubo de 1 m, maior dimensão 2 m
+        CHECK(!viewer::loadModelAsset(dir, "../x.obj", 1.0f, a, err) && err.find("invalido") != std::string::npos);
+        CHECK(!viewer::loadModelAsset(dir, "/etc/x.obj", 1.0f, a, err));
+        CHECK(!viewer::loadModelAsset(dir, "nao_existe.obj", 1.0f, a, err) && !a.shape);
+        CHECK(viewer::loadModelAsset(dir, "toro.obj", 1.0f, a, err) && a.concave);
+        // malha para desenhar: todos os triângulos, UV invertido em v, normais unitárias, vértices dentro do fecho
+        CHECK(viewer::loadModelAsset(dir, "esfera.obj", 1.0f, a, err));
+        const std::vector<viewer::MeshGroup> groups = viewer::buildMeshGroups(a);
+        CHECK(groups.size() == 1 && groups[0].triangleCount() == 320 && groups[0].positions.size() == 320 * 9 && groups[0].texcoords.size() == 320 * 6);
+        CHECK(groups[0].material == 0);
+        float maxR = 0;
+        for (std::size_t i = 0; i < groups[0].positions.size(); i += 3)
+            maxR = std::max(maxR, std::sqrt(groups[0].positions[i] * groups[0].positions[i] + groups[0].positions[i + 1] * groups[0].positions[i + 1] +
+                                            groups[0].positions[i + 2] * groups[0].positions[i + 2]));
+        CHECK(near(maxR, 0.5f * a.scale, 0.02f));   // esfera de raio 0,5 · escala, centrada na origem do corpo
+        bool unit = true, uvOk = true;
+        for (std::size_t i = 0; i < groups[0].normals.size(); i += 3) {
+            const float l = std::sqrt(groups[0].normals[i] * groups[0].normals[i] + groups[0].normals[i + 1] * groups[0].normals[i + 1] + groups[0].normals[i + 2] * groups[0].normals[i + 2]);
+            unit = unit && near(l, 1.0f, 1e-4f);
+        }
+        for (float u : groups[0].texcoords) uvOk = uvOk && u >= -1e-4f && u <= 1.0001f;
+        CHECK(unit && uvOk);
+        // as normais apontam para fora (esfera centrada): normal · posição do 1º vértice > 0
+        bool outward = true;
+        for (std::size_t tri = 0; tri < groups[0].triangleCount(); ++tri) {
+            const float* p = &groups[0].positions[tri * 9];
+            const float* n = &groups[0].normals[tri * 3];
+            outward = outward && (n[0] * p[0] + n[1] * p[1] + n[2] * p[2]) > 0;
+        }
+        CHECK(outward);
+        // v do .obj: o UV (0,0) do cubo vira (0,1) na raylib
+        viewer::ModelAsset c;
+        CHECK(viewer::loadModelAsset(dir, "cubo.obj", 1.0f, c, err));
+        const auto cg = viewer::buildMeshGroups(c);
+        CHECK(cg.size() == 1 && cg[0].triangleCount() == 12 && near(cg[0].texcoords[0], 0.0f) && near(cg[0].texcoords[1], 1.0f));
+    }
+    // --- spawn de um modelo ---------------------------------------------------------------------------------------
+    viewer::Scene s = viewer::makeEmptyScene(true);
+    auto asset = std::make_shared<viewer::ModelAsset>();
+    CHECK(viewer::loadModelAsset(dir, "cubo.obj", 1.0f, *asset, err));
+    viewer::SpawnParams sp;
+    sp.model = asset;
+    sp.mass = 3;
+    sp.position = Vector3(1, 4, -2);
+    sp.size = Real(0.2);   // ignorado para modelos
+    sp.orientation = viewer::orientationFromAxisAngle(Vector3(1, 1, 0), Real(0.9));
+    const BodyId id = viewer::spawnBody(s, sp);
+    CHECK(id != kInvalidBodyId && s.bodies.back().model == asset && s.bodies.back().kind == viewer::ShapeKind::Polyhedron);
+    CHECK(s.world->getBody(id).getShape() == static_cast<const Shape*>(asset->shape.get()) && near(static_cast<float>(s.world->getBody(id).getMass()), 3.0f));
+    viewer::SpawnParams st = sp;
+    st.isStatic = true;
+    st.position = Vector3(5, 1, 5);
+    const BodyId sid = viewer::spawnBody(s, st);
+    CHECK(sid != kInvalidBodyId && s.world->getBody(sid).isStatic() && s.bodies.back().model);
+    viewer::SpawnParams empty;   // modelo sem forma: cai no tipo comum
+    empty.model = std::make_shared<viewer::ModelAsset>();
+    CHECK(viewer::spawnBody(s, empty) != kInvalidBodyId && !s.bodies.back().model);
+    // --- .scene: ida e volta com a linha `model` ---------------------------------------------------------------------------
+    for (int i = 0; i < 60; ++i) s.world->update(Real(1) / Real(60));
+    const std::string txt = viewer::serializeScene(s);
+    CHECK(txt.find("  model ") != std::string::npos && txt.find("cubo.obj") != std::string::npos);
+    viewer::Scene back;
+    CHECK(viewer::parseScene(txt, back, err, dir, &warn) && warn.empty());
+    CHECK(back.bodies.size() == s.bodies.size());
+    int withModel = 0;
+    for (const viewer::SceneBody& b : back.bodies)
+        if (b.model) {
+            ++withModel;
+            CHECK(b.model->file == "cubo.obj" && near(b.model->scale, asset->scale, 1e-5f) && b.model->shape == b.poly && b.model->obj && b.model->obj->triangles.size() == 12);
+            CHECK(near(static_cast<float>(b.model->offset.x), static_cast<float>(asset->offset.x), 1e-5f));
+        }
+    CHECK(withModel == 2);
+    CHECK(viewer::serializeScene(back) == txt);   // texto idêntico
+    // sem pasta de modelos ou arquivo ausente: poliedro comum + aviso, nunca erro
+    viewer::Scene plain;
+    CHECK(viewer::parseScene(txt, plain, err, "", &warn) && warn.find("sem pasta de modelos") != std::string::npos);
+    for (const viewer::SceneBody& b : plain.bodies) CHECK(!b.model);
+    CHECK(viewer::parseScene(txt, plain, err, dir + "/nao_existe", &warn) && warn.find("nao carregado") != std::string::npos && !plain.bodies.back().model);
+    // entradas inválidas: erro com a linha, cena de destino intacta
+    {
+        auto withModelLine = [&](const std::string& line) {
+            std::string t = txt;
+            const std::size_t at = t.find("  model ");
+            t.replace(at, t.find('\n', at) - at, line);
+            return t;
+        };
+        viewer::Scene keep = viewer::makeEmptyScene(true);
+        const std::size_t nb = keep.bodies.size();
+        const char* bad[][2] = {
+            {"  model 0 0 0 0 cubo.obj", "escala"}, {"  model 5000 0 0 0 cubo.obj", "escala"}, {"  model 1 0 0 cubo.obj", "espera"},
+            {"  model 1 0 0 0 ../x.obj", "invalido"}, {"  model 1 0 0 0 /etc/passwd", "invalido"}, {"  model 1 0 0 0 C:/x.obj", "invalido"},
+            {"  model 1 nan 0 0 cubo.obj", "numero invalido"}, {"  model 1 1e9 0 0 cubo.obj", "deslocamento"},
+        };
+        for (const auto& b : bad) {
+            CHECK(!viewer::parseScene(withModelLine(b[0]), keep, err, dir) && err.find(b[1]) != std::string::npos && err.find("linha") != std::string::npos);
+            CHECK(keep.bodies.size() == nb);
+        }
+        // `model` sem forma (pivô): recusado. (V17: com box ou sphere agora vale: o colisor é a caixa/esfera.)
+        std::string t2 = "physics_scene 1\nbody\n type static\n shape none\n model 1 0 0 0 cubo.obj\nend\n";
+        CHECK(!viewer::parseScene(t2, keep, err, dir) && err.find("so vale com") != std::string::npos);
+        std::string t3 = "physics_scene 1\nbody\n type dynamic\n shape box 1 1 1\n model 1 0 0 0 cubo.obj\n mass 1\nend\n";
+        viewer::Scene boxed;
+        CHECK(viewer::parseScene(t3, boxed, err, dir) && boxed.bodies.size() == 1 && boxed.bodies[0].model && boxed.bodies[0].kind == viewer::ShapeKind::Box);
+    }
+    // arquivo no disco com a pasta de modelos
+    {
+        namespace fs = std::filesystem;
+        const fs::path f = fs::temp_directory_path() / "viewer_v15b.scene";
+        CHECK(viewer::saveSceneFile(s, f.string(), err));
+        viewer::Scene loaded;
+        CHECK(viewer::loadSceneFile(f.string(), loaded, err, dir, &warn) && warn.empty());
+        int n = 0;
+        for (const viewer::SceneBody& b : loaded.bodies) n += b.model ? 1 : 0;
+        CHECK(n == 2);
+        fs::remove(f);
+    }
+    // o corpo-modelo cai e repousa no chão (como o cubo importado do teste do núcleo), carregado do arquivo
+    for (int i = 0; i < 600; ++i) back.world->update(Real(1) / Real(60));
+    for (const viewer::SceneBody& b : back.bodies)
+        if (b.model && !b.isStatic) CHECK(near(static_cast<float>(back.world->getBody(b.id).getTransform().position.y), 0.5f, 0.03f));
+#endif
+}
+
+static std::vector<std::string> splitCsv(const std::string& line) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : line) { if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c; }
+    out.push_back(cur);
+    return out;
+}
+
+// V16 — gravador de trajetória e CSV
+static void testTrajectoryRecorder() {
+    using namespace physics;
+    const Real dt = Real(1) / Real(60);
+    {   // sem corpo selecionado / cena sem dinamicos: recusa com mensagem
+        viewer::Scene s = viewer::makeFallingBoxScene();
+        viewer::TrajectoryRecorder r;
+        std::string e;
+        CHECK(!r.start(s, viewer::RecordTarget::Selected, kInvalidBodyId, &e) && !e.empty() && !r.recording());
+        viewer::Scene empty = viewer::makeEmptyScene(true);
+        e.clear();
+        CHECK(!r.start(empty, viewer::RecordTarget::AllDynamic, kInvalidBodyId, &e) && !e.empty());
+        CHECK(r.toCsv() == viewer::TrajectoryRecorder::header() + "\n");
+    }
+    {   // gravação de um corpo: linha inicial + uma por passo; CSV bem formado; quatérnio unitário
+        viewer::Scene s = viewer::makeFallingBoxScene();
+        viewer::TrajectoryRecorder r;
+        CHECK(r.start(s, viewer::RecordTarget::Selected, s.focus));
+        CHECK(r.recording() && r.rowCount() == 1 && r.rows()[0].t == 0.0);
+        CHECK(r.capture(s) == 0);   // física não andou: nada novo
+        for (int i = 0; i < 120; ++i) { s.world->update(dt); r.capture(s); }
+        CHECK(r.rowCount() == 121 && r.recording());
+        CHECK(near(static_cast<float>(r.duration()), 2.0f, 1e-3f));
+        bool unit = true, mono = true;
+        for (std::size_t i = 0; i < r.rows().size(); ++i) {
+            unit = unit && std::fabs(r.rows()[i].qNorm - 1.0) < 1e-4;
+            if (i) mono = mono && r.rows()[i].t > r.rows()[i - 1].t && r.rows()[i].step > r.rows()[i - 1].step;
+        }
+        CHECK(unit && mono);
+        const std::string csv = r.toCsv();
+        std::vector<std::string> lines;
+        std::size_t a = 0;
+        for (std::size_t b; (b = csv.find('\n', a)) != std::string::npos; a = b + 1) lines.push_back(csv.substr(a, b - a));
+        CHECK(lines.size() == 122 && csv.back() == '\n');
+        const std::size_t cols = splitCsv(lines[0]).size();
+        CHECK(cols == 24);
+        bool wellFormed = true, noNan = csv.find("nan") == std::string::npos && csv.find("inf") == std::string::npos;
+        for (const std::string& l : lines) wellFormed = wellFormed && splitCsv(l).size() == cols;
+        CHECK(wellFormed && noNan);
+        // ida e volta: o quatérnio da última linha lido do texto == o do corpo
+        const std::vector<std::string> f = splitCsv(lines.back());
+        const Quaternion& q = s.world->getBody(s.focus).getOrientation();
+        CHECK(near(static_cast<float>(std::stod(f[6])), static_cast<float>(q.w), 1e-6f) && near(static_cast<float>(std::stod(f[7])), static_cast<float>(q.x), 1e-6f)
+              && near(static_cast<float>(std::stod(f[8])), static_cast<float>(q.y), 1e-6f) && near(static_cast<float>(std::stod(f[9])), static_cast<float>(q.z), 1e-6f));
+    }
+    {   // todos os dinâmicos; parada por reinício da cena; por corpo apagado
+        viewer::Scene s = viewer::makeStackScene();
+        std::size_t dyn = 0;
+        for (const viewer::SceneBody& sb : s.bodies) if (s.world->getBody(sb.id).isDynamic()) ++dyn;
+        viewer::TrajectoryRecorder r;
+        CHECK(r.start(s, viewer::RecordTarget::AllDynamic, kInvalidBodyId) && r.rowCount() == dyn);
+        for (int i = 0; i < 10; ++i) { s.world->update(dt); r.capture(s); }
+        CHECK(r.rowCount() == dyn * 11);
+        viewer::Scene s2 = viewer::makeStackScene();   // "reiniciada": contador de passos volta a zero
+        CHECK(r.capture(s2) == 0 && !r.recording() && !r.stopReason().empty());
+        const std::size_t keep = r.rowCount();
+        s.world->update(dt);
+        CHECK(r.capture(s) == 0 && r.rowCount() == keep);   // parada não grava mais
+    }
+    {
+        viewer::Scene s = viewer::makeFallingBoxScene();
+        viewer::TrajectoryRecorder r;
+        CHECK(r.start(s, viewer::RecordTarget::Selected, s.focus));
+        CHECK(viewer::deleteBody(s, s.focus));
+        s.world->update(dt);
+        CHECK(r.capture(s) == 0 && !r.recording());
+    }
+    {   // salvar em arquivo (cria pasta) e erro em caminho inválido
+        viewer::Scene s = viewer::makeFallingBoxScene();
+        viewer::TrajectoryRecorder r;
+        r.start(s, viewer::RecordTarget::Selected, s.focus);
+        for (int i = 0; i < 5; ++i) { s.world->update(dt); r.capture(s); }
+        const std::string dir = (std::filesystem::temp_directory_path() / "viewer_traj_test").string();
+        std::filesystem::remove_all(dir);
+        std::string err;
+        CHECK(r.save(dir + "/sub/t.csv", err));
+        CHECK(std::filesystem::exists(dir + "/sub/t.csv") && std::filesystem::file_size(dir + "/sub/t.csv") == r.toCsv().size());
+        std::filesystem::remove_all(dir);
+        err.clear();
+        CHECK(!r.save("/proc/nao/pode/t.csv", err) && !err.empty());
+    }
+}
+
+// V17 — layout dos painéis, importador de modelos e tipo de colisor
+static std::string slurp(const std::filesystem::path& p) {
+    std::ifstream f(p, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+}
+static void spit(const std::filesystem::path& p, const std::string& t) {
+    std::filesystem::create_directories(p.parent_path());
+    std::ofstream f(p, std::ios::binary | std::ios::trunc);
+    f << t;
+}
+
+static void testV17() {
+    using namespace physics;
+    namespace fs = std::filesystem;
+    {   // --- alturas dos painéis: o conteúdo nunca passa do rodapé, em nenhuma combinação ---
+        namespace pm = viewer::panel;
+        for (int box = 0; box < 2; ++box)
+            for (int model = 0; model < 2; ++model) {
+                if (box && model) continue;   // caixa e modelo são exclusivos
+                const float end = pm::addFormContentEnd(box != 0, model != 0);
+                const float h = pm::objPanelHeight(1, 0, box != 0, model != 0);
+                CHECK(end + pm::kFooterGap + pm::kFooter <= h + 1e-3f);   // o rodapé começa abaixo do conteúdo
+                CHECK(h >= pm::kAddOtherTabsH);
+            }
+        // o caso do print: caixa precisava de mais que os 440 px antigos
+        CHECK(pm::addFormHeight(true, false) > 440.0f);
+        CHECK(pm::objPanelHeight(1, 3, true, false) >= pm::addFormHeight(true, false));
+        CHECK(pm::kQuatH >= pm::kQuatContentEnd + 8.0f);
+        CHECK(pm::objPanelHeight(0, 0, false, false) == pm::kObjectTabH && pm::objPanelHeight(2, 0, false, false) == pm::kScenesTabH &&
+              pm::objPanelHeight(3, 0, false, false) == pm::kJointsTabH);
+    }
+    {   // --- nomes seguros ---
+        CHECK(viewer::sanitizeModelName("Minha Pessoa 3D") == "Minha_Pessoa_3D");
+        CHECK(viewer::sanitizeModelName("../../etc/passwd") == "etcpasswd");
+        CHECK(viewer::sanitizeModelName("") == "modelo" && viewer::sanitizeModelName("..//") == "modelo" && viewer::sanitizeModelName("___") == "modelo");
+        CHECK(viewer::sanitizeModelName(std::string(200, 'a')).size() == 40);
+        CHECK(viewer::sanitizeModelName("a\xc3\xa7\xc3\xa3o") == "ao");   // acentos somem
+    }
+    const fs::path root = fs::temp_directory_path() / "viewer_import_test";
+    fs::remove_all(root);
+    const std::string cube =
+        "mtllib mat.mtl\nusemtl m1\nv 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n"
+        "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+        "f 1/1 4/4 3/3 2/2\nf 5/1 6/2 7/3 8/4\nf 1/1 2/2 6/3 5/4\nf 2/1 3/2 7/3 6/4\nf 3/1 4/2 8/3 7/4\nf 4/1 1/2 5/3 8/4\n";
+    {   // --- importar: .obj + .mtl + textura, de uma pasta qualquer ---
+        const fs::path src = root / "origem";
+        spit(src / "Meu Cubo.obj", cube);
+        spit(src / "mat.mtl", "newmtl m1\nKd 0.5 0.5 0.5\nmap_Kd tex/cor.png\n");
+        spit(src / "tex" / "cor.png", "PNGFAKE");
+        spit(src / "tex" / "nao_usada.png", "X");
+        const std::string models = (root / "models").string();
+        viewer::ImportResult r;
+        std::string err;
+        CHECK(viewer::importModel((src / "Meu Cubo.obj").string(), models, r, err));
+        CHECK(r.file == "Meu_Cubo/Meu_Cubo.obj" && r.copied == 3);
+        CHECK(fs::exists(root / "models/Meu_Cubo/Meu_Cubo.obj") && fs::exists(root / "models/Meu_Cubo/mat.mtl") && fs::exists(root / "models/Meu_Cubo/tex/cor.png"));
+        CHECK(!fs::exists(root / "models/Meu_Cubo/tex/nao_usada.png"));   // só o que o modelo usa
+        CHECK(slurp(root / "models/Meu_Cubo/Meu_Cubo.obj") == cube && slurp(root / "models/Meu_Cubo/tex/cor.png") == "PNGFAKE");
+        // aparece na lista e carrega como asset, com a textura achada
+        const std::vector<std::string> files = viewer::listModelFiles(models);
+        CHECK(files.size() == 1 && files[0] == "Meu_Cubo/Meu_Cubo.obj");
+        viewer::ModelAsset a;
+        std::string warn;
+        CHECK(viewer::loadModelAsset(models, r.file, 1.0f, a, err, &warn) && a.shape && a.obj->materials.size() == 1 &&
+              a.obj->materials[0].diffuseMap == "tex/cor.png" && fs::exists(fs::path(a.baseDir) / a.obj->materials[0].diffuseMap));
+        // de novo: nunca sobrescreve (nome _2, _3)
+        viewer::ImportResult r2, r3;
+        CHECK(viewer::importModel((src / "Meu Cubo.obj").string(), models, r2, err) && r2.file == "Meu_Cubo_2/Meu_Cubo_2.obj");
+        CHECK(viewer::importModel((src / "Meu Cubo.obj").string(), models, r3, err) && r3.file == "Meu_Cubo_3/Meu_Cubo_3.obj");
+        CHECK(slurp(root / "models/Meu_Cubo/Meu_Cubo.obj") == cube);
+        // sem .mtl e sem textura: importa com avisos
+        { std::string c2 = cube; c2.replace(c2.find("mat.mtl"), 7, "nao.mtl"); spit(src / "solto.obj", c2); }
+        viewer::ImportResult r4;
+        CHECK(viewer::importModel((src / "solto.obj").string(), models, r4, err) && r4.copied == 1 && !r4.notes.empty());
+    }
+    {   // --- recusas, sem deixar lixo em models/ ---
+        const std::string models = (root / "models2").string();
+        viewer::ImportResult r;
+        std::string err;
+        spit(root / "ruim" / "x.txt", "v 0 0 0");
+        CHECK(!viewer::importModel((root / "ruim/x.txt").string(), models, r, err) && err.find(".obj") != std::string::npos);
+        CHECK(!viewer::importModel((root / "ruim/nao_existe.obj").string(), models, r, err) && !err.empty());
+        spit(root / "ruim" / "lixo.obj", "v 0 0 0\nf 1 2 9\n");
+        CHECK(!viewer::importModel((root / "ruim/lixo.obj").string(), models, r, err) && err.find("linha") != std::string::npos);
+        spit(root / "ruim" / "vazio.obj", "v 0 0 0\nv 1 0 0\n");
+        CHECK(!viewer::importModel((root / "ruim/vazio.obj").string(), models, r, err) && err.find("faces") != std::string::npos);
+        // caminhos inseguros dentro do .obj/.mtl: ignorados com aviso (nada copiado de fora)
+        spit(root / "ruim" / "esperto.obj", "mtllib ../segredo.mtl\nmtllib /etc/passwd\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\nf 1 2 4\nf 1 3 4\nf 2 3 4\n");
+        spit(root / "segredo.mtl", "newmtl a\n");
+        CHECK(viewer::importModel((root / "ruim/esperto.obj").string(), models, r, err) && r.copied == 1 && !fs::exists(root / "models2/esperto/segredo.mtl"));
+        // textura fora da pasta / formato estranho: ignoradas
+        spit(root / "ruim" / "t.obj", "mtllib t.mtl\nusemtl a\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\nf 1 2 4\nf 1 3 4\nf 2 3 4\n");
+        spit(root / "ruim" / "t.mtl", "newmtl a\nmap_Kd ../fora.png\n");
+        CHECK(viewer::importModel((root / "ruim/t.obj").string(), models, r, err) && r.copied == 2);
+        CHECK(!fs::exists(root / "models2/t/fora.png") && !fs::exists(root / "models2/fora.png"));
+        // erro não deixa pasta pela metade
+        std::size_t dirs = 0;
+        for (const auto& e : fs::directory_iterator(models)) dirs += e.is_directory() ? 1 : 0;
+        CHECK(dirs == 2);   // só "esperto" e "t"
+    }
+    {   // --- importPath: arquivo, pasta, material solto, inexistente ---
+        const std::string models = (root / "models3").string();
+        std::vector<viewer::ImportResult> got;
+        std::vector<std::string> msg;
+        spit(root / "pasta" / "a.obj", cube);
+        spit(root / "pasta" / "mat.mtl", "newmtl m1\n");
+        spit(root / "pasta" / "sub" / "b.obj", cube);
+        CHECK(viewer::importPath((root / "pasta").string(), models, got, msg) && got.size() == 2);
+        CHECK(!viewer::importPath((root / "pasta/mat.mtl").string(), models, got, msg) && got.empty() && !msg.empty());
+        msg.clear();
+        CHECK(!viewer::importPath((root / "nada").string(), models, got, msg) && !msg.empty() && msg[0].find("ERRO") == 0);
+        fs::create_directories(root / "vazia");
+        msg.clear();
+        CHECK(!viewer::importPath((root / "vazia").string(), models, got, msg) && !msg.empty());
+        CHECK(viewer::importPath((root / "pasta/a.obj").string(), models, got, msg) && got.size() == 1);
+    }
+    {   // --- tipos de colisor: caixa e esfera envolventes ---
+        viewer::ObjModel m;
+        std::string err;
+        // paralelepípedo 2 x 4 x 1 centrado fora da origem (x de 10 a 12, y de 0 a 4, z de -0,5 a 0,5)
+        const std::string txt = "v 10 0 -0.5\nv 12 0 -0.5\nv 12 4 -0.5\nv 10 4 -0.5\nv 10 0 0.5\nv 12 0 0.5\nv 12 4 0.5\nv 10 4 0.5\n"
+                                "f 1 4 3 2\nf 5 6 7 8\nf 1 2 6 5\nf 2 3 7 6\nf 3 4 8 7\nf 4 1 5 8\n";
+        CHECK(viewer::parseObj(txt, m, err));
+        viewer::ImportedShape box, sph, hull;
+        CHECK(viewer::makeImportedShape(m, 1.0f, viewer::ColliderKind::Box, box, err));
+        CHECK(box.shape && box.shape->getType() == ShapeType::Box && box.collider == viewer::ColliderKind::Box);
+        CHECK(near(static_cast<float>(box.boxHalf.x), 1.0f) && near(static_cast<float>(box.boxHalf.y), 2.0f) && near(static_cast<float>(box.boxHalf.z), 0.5f));
+        CHECK(near(static_cast<float>(box.offset.x), 11.0f) && near(static_cast<float>(box.offset.y), 2.0f) && near(static_cast<float>(box.offset.z), 0.0f));   // origem = centro da caixa
+        CHECK(near(static_cast<float>(box.colliderVolume), 8.0f, 1e-3f) && near(static_cast<float>(box.fill), 1.0f, 1e-3f));
+        CHECK(viewer::makeImportedShape(m, 2.0f, viewer::ColliderKind::Sphere, sph, err));
+        CHECK(sph.shape && sph.shape->getType() == ShapeType::Sphere);
+        CHECK(near(sph.sphereRadius, std::sqrt(1.0f + 4.0f + 0.25f) * 2.0f, 1e-3f));   // distância do centro ao canto, na escala 2
+        CHECK(sph.fill < 0.7 && sph.fill > 0.0);   // esfera envolvente folgada
+        CHECK(viewer::makeImportedShape(m, 1.0f, viewer::ColliderKind::Hull, hull, err) && hull.shape && hull.shape->getType() == ShapeType::Polyhedron);
+        CHECK(near(static_cast<float>(hull.fill), 1.0f, 1e-2f));
+        // modelo plano: só Box/Sphere aceitam (espessura mínima), fecho recusa
+        viewer::ObjModel flat;
+        CHECK(viewer::parseObj("v 0 0 0\nv 2 0 0\nv 2 0 2\nv 0 0 2\nf 1 2 3 4\n", flat, err));
+        viewer::ImportedShape fl;
+        CHECK(!viewer::makeImportedShape(flat, 1.0f, viewer::ColliderKind::Hull, fl, err) && !fl.shape);
+        CHECK(viewer::makeImportedShape(flat, 1.0f, viewer::ColliderKind::Box, fl, err) && near(static_cast<float>(static_cast<const BoxShape&>(*fl.shape).getHalfExtents().y), 0.005f));
+        CHECK(viewer::makeImportedShape(flat, 1.0f, viewer::ColliderKind::Sphere, fl, err));
+        // escala/tamanho inválidos
+        CHECK(!viewer::makeImportedShape(m, 0.0f, viewer::ColliderKind::Box, fl, err) && !fl.shape);
+        CHECK(!viewer::makeImportedShape(m, 100.0f, viewer::ColliderKind::Sphere, fl, err));   // 400 m
+        CHECK(!viewer::makeImportedShape(m, 1.0f, static_cast<viewer::ColliderKind>(9), fl, err));
+    }
+#ifdef VIEWER_MODELS_DIR
+    {   // --- corpos com cada colisor: criar, simular, salvar e carregar ---
+        const std::string dir = VIEWER_MODELS_DIR;
+        for (int k = 0; k < viewer::kColliderKindCount; ++k) {
+            const viewer::ColliderKind ck = static_cast<viewer::ColliderKind>(k);
+            viewer::Scene s = viewer::makeEmptyScene(true);
+            viewer::ModelAsset a;
+            std::string err, warn;
+            CHECK(viewer::loadModelAsset(dir, "toro.obj", 1.5f, a, err, &warn, ck) && a.collider == ck && a.shape);
+            viewer::SpawnParams sp;
+            sp.model = std::make_shared<viewer::ModelAsset>(a);
+            sp.position = Vector3(0, 3, 0);
+            sp.orientation = Quaternion::fromAxisAngle(Vector3(1, 0, 1).normalized(), Real(0.7));
+            const BodyId id = viewer::spawnBody(s, sp);
+            CHECK(id != kInvalidBodyId && s.bodies.back().model);
+            CHECK(s.bodies.back().kind == (k == 0 ? viewer::ShapeKind::Polyhedron : k == 1 ? viewer::ShapeKind::Box : viewer::ShapeKind::Sphere));
+            CHECK(s.world->getBody(id).getShape()->getType() == (k == 0 ? ShapeType::Polyhedron : k == 1 ? ShapeType::Box : ShapeType::Sphere));
+            for (int i = 0; i < 240; ++i) s.world->update(Real(1) / Real(60));
+            const RigidBody& b = s.world->getBody(id);
+            CHECK(b.getTransform().position.isFinite() && b.getTransform().position.y > Real(0) && std::fabs(static_cast<double>(b.getOrientation().norm()) - 1.0) < 1e-4);
+            // ida e volta pelo .scene (o `model` agora sai com box/sphere também)
+            const std::string txt = viewer::serializeScene(s);
+            CHECK(txt.find("\n  model ") != std::string::npos);
+            viewer::Scene back;
+            std::string e2, w2;
+            CHECK(viewer::parseScene(txt, back, e2, dir, &w2) && w2.empty() && back.bodies.size() == s.bodies.size());
+            CHECK(back.bodies.back().model && back.bodies.back().model->collider == ck && back.bodies.back().kind == s.bodies.back().kind);
+            CHECK(viewer::serializeScene(back) == txt);
+        }
+    }
+#endif
+    fs::remove_all(root);
+}
+
 int main() {
     testMatchesEngine();
     testKnownRotation();
@@ -2011,6 +2447,9 @@ int main() {
     testDockLayout();
     testSceneEditor();
     testModelImport();
+    testModelScene();
+    testTrajectoryRecorder();
+    testV17();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }

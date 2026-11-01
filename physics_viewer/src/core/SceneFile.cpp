@@ -11,11 +11,13 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <memory>
 #include <sstream>
 
 #include "physics/geometry/BoxShape.h"
 #include "physics/geometry/SphereShape.h"
+#include "viewer/core/ModelAsset.h"
 #include "viewer/core/PolyShapes.h"
 #include "viewer/core/WorldEditor.h"
 
@@ -106,6 +108,12 @@ struct BodyDraft {
     bool allowSleep = true;
     unsigned char r = 200, g = 200, b = 200;
     bool focus = false;
+    // V15b: modelo 3D (opcional; a forma de colisão continua sendo o `poly` do fecho)
+    bool hasModel = false;
+    int modelLine = 0;
+    Real modelScale = 1;
+    Vector3 modelOffset;
+    std::string modelFile;
 };
 
 struct JointDraft {
@@ -213,6 +221,14 @@ void parseBodyLine(const Tokens& k, BodyDraft& d) {
         d.r = static_cast<unsigned char>(k.integer(1, 0, 255));
         d.g = static_cast<unsigned char>(k.integer(2, 0, 255));
         d.b = static_cast<unsigned char>(k.integer(3, 0, 255));
+    } else if (key == "model") {   // model <escala> <ox> <oy> <oz> <arquivo.obj>
+        if (k.t.size() < 6) fail(ln, "'model' espera escala, deslocamento (3 valores) e o arquivo");
+        d.hasModel = true;
+        d.modelLine = ln;
+        d.modelScale = k.real(1);
+        d.modelOffset = k.vector(2);
+        d.modelFile.clear();
+        for (std::size_t i = 5; i < k.t.size(); ++i) d.modelFile += (i > 5 ? " " : "") + k.t[i];
     } else if (key == "focus") {
         k.need(1);
         d.focus = true;
@@ -277,6 +293,8 @@ std::string serializeScene(const Scene& scene) {
                 o << "\n";
             }
         }
+        if (sb.model && shape)   // V15b (V17: também com colisor em caixa ou esfera)
+            o << "  model " << num(static_cast<Real>(sb.model->scale)) << " " << vec(sb.model->offset) << " " << sb.model->file << "\n";
         if (b.isDynamic()) o << "  mass " << num(b.getMass()) << "\n";
         o << "  position " << vec(b.getTransform().position) << "\n";
         const Quaternion& q = b.getOrientation();
@@ -324,9 +342,9 @@ std::string serializeScene(const Scene& scene) {
 // ----------------------------------------------------------------------------------------------------
 // parseScene
 // ----------------------------------------------------------------------------------------------------
-bool parseScene(const std::string& text, Scene& out, std::string& error) {
+bool parseScene(const std::string& text, Scene& out, std::string& error, const std::string& modelDir, std::string* warning) {
     try {
-        if (text.size() > scenefile::kMaxBytes) fail(0, "arquivo grande demais (limite 8 MB)");
+        if (text.size() > scenefile::kMaxBytes) fail(0, "arquivo grande demais (limite 32 MB)");
 
         // ---- 1) texto -> rascunhos (nada é criado ainda) ----
         std::string name = "Cena carregada";
@@ -478,6 +496,8 @@ bool parseScene(const std::string& text, Scene& out, std::string& error) {
         s.cameraTarget = camTarget;
         s.cameraDistance = camDistance;
         std::vector<BodyId> ids;
+        std::map<std::string, std::shared_ptr<const ObjModel>> objCache;
+        std::string warnings;
         int bodyNo = 0;
         for (const BodyDraft& d : bodies) {
             ++bodyNo;
@@ -532,6 +552,36 @@ bool parseScene(const std::string& text, Scene& out, std::string& error) {
             } catch (const std::exception& e) {
                 fail(d.line, where + e.what());
             }
+            if (d.hasModel) {   // V15b: a malha do .obj só para DESENHAR; sem o arquivo o corpo vira poliedro comum
+                if (d.shape != BodyDraft::Shape::Poly && d.shape != BodyDraft::Shape::Box && d.shape != BodyDraft::Shape::Sphere)
+                    fail(d.modelLine, "'model' so vale com 'shape poly', 'shape box' ou 'shape sphere'");
+                if (!(d.modelScale >= Real(modellimits::kMinScale) && d.modelScale <= Real(modellimits::kMaxScale)))
+                    fail(d.modelLine, "escala do modelo fora da faixa [0.001, 1000]");
+                if (!d.modelOffset.isWithin(Real(1e4))) fail(d.modelLine, "deslocamento do modelo fora da faixa");
+                std::string rel = d.modelFile;
+                std::replace(rel.begin(), rel.end(), '\\', '/');
+                if (rel.empty() || rel[0] == '/' || rel.find(':') != std::string::npos || rel.find("..") != std::string::npos)
+                    fail(d.modelLine, "nome de modelo invalido '" + d.modelFile + "'");
+                if (!modelDir.empty()) {
+                    auto it = objCache.find(rel);
+                    if (it == objCache.end()) {
+                        auto obj = std::make_shared<ObjModel>();
+                        std::string oerr, owarn;
+                        if (!loadObjFile((std::filesystem::path(modelDir) / rel).string(), *obj, oerr, &owarn)) {
+                            obj.reset();
+                            warnings += "modelo '" + rel + "' nao carregado (" + oerr + "): desenhado como poliedro; ";
+                        } else if (!owarn.empty()) {
+                            warnings += rel + ": " + owarn;
+                        }
+                        it = objCache.emplace(rel, std::shared_ptr<const ObjModel>(obj)).first;
+                    }
+                    if (it->second)
+                        sb.model = std::make_shared<ModelAsset>(attachModel(it->second, rel, modelBaseDir(modelDir, rel),
+                                                                            static_cast<float>(d.modelScale), d.modelOffset, rd.shape));
+                } else {
+                    warnings += "sem pasta de modelos: '" + rel + "' desenhado como poliedro; ";
+                }
+            }
             sb.isStatic = d.type == BodyType::Static;
             sb.r = d.r;
             sb.g = d.g;
@@ -554,6 +604,7 @@ bool parseScene(const std::string& text, Scene& out, std::string& error) {
         }
         for (const auto& l : links) s.links.push_back({ids[static_cast<std::size_t>(l.second.first - 1)], ids[static_cast<std::size_t>(l.second.second - 1)]});
         applyWorld(*s.world, wp);
+        if (warning) *warning = warnings;
         out = std::move(s);
         error.clear();
         return true;
@@ -594,7 +645,7 @@ bool saveSceneFile(const Scene& scene, const std::string& path, std::string& err
     }
 }
 
-bool loadSceneFile(const std::string& path, Scene& out, std::string& error) {
+bool loadSceneFile(const std::string& path, Scene& out, std::string& error, const std::string& modelDir, std::string* warning) {
     namespace fs = std::filesystem;
     try {
         std::error_code ec;
@@ -604,7 +655,7 @@ bool loadSceneFile(const std::string& path, Scene& out, std::string& error) {
             return false;
         }
         if (size > scenefile::kMaxBytes) {
-            error = "arquivo grande demais (limite 8 MB)";
+            error = "arquivo grande demais (limite 32 MB)";
             return false;
         }
         std::ifstream f(fs::path(path), std::ios::binary);
@@ -614,7 +665,7 @@ bool loadSceneFile(const std::string& path, Scene& out, std::string& error) {
         }
         std::ostringstream ss;
         ss << f.rdbuf();
-        return parseScene(ss.str(), out, error);
+        return parseScene(ss.str(), out, error, modelDir, warning);
     } catch (const std::exception& e) {
         error = e.what();
         return false;

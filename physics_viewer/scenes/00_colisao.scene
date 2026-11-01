@@ -1,0 +1,79 @@
+physics_scene 1
+# quaternios em 'orientation' sao w x y z
+name 00_colisao
+gravity 0 -9.81 0
+timestep 0.016666668
+iterations 10 3
+slop 0.005 0.5
+warm_start 1
+sleep 1 0.5
+camera 0 1.5 0 13
+body
+  type static
+  shape box 10 0.5 10
+  position 0 -0.5 0
+  orientation 1 0 0 0
+  velocity 0 0 0
+  angular_velocity 0 0 0
+  material 0.6 0
+  damping 0 0.01
+  gravity_scale 1
+  allow_sleep 1
+  color 120 130 140
+end
+body
+  type dynamic
+  shape poly
+  vertex 0.6 0 0
+  vertex -0.6 0 0
+  vertex 0 0.6 0
+  vertex 0 -0.6 0
+  vertex 0 0 0.6
+  vertex 0 0 -0.6
+  face 0 2 4
+  face 2 1 4
+  face 1 3 4
+  face 3 0 4
+  face 2 0 5
+  face 1 2 5
+  face 3 1 5
+  face 0 3 5
+  mass 1
+  position 0 0.46153855 0
+  orientation 1 0 0 0
+  velocity 10 0 0
+  angular_velocity 0 0 -3.8461533
+  material 0.5 0.2
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 90 170 240
+end
+body
+  type dynamic
+  shape poly
+  vertex 0.6 0 0
+  vertex -0.6 0 0
+  vertex 0 0.6 0
+  vertex 0 -0.6 0
+  vertex 0 0 0.6
+  vertex 0 0 -0.6
+  face 0 2 4
+  face 2 1 4
+  face 1 3 4
+  face 3 0 4
+  face 2 0 5
+  face 1 2 5
+  face 3 1 5
+  face 0 3 5
+  mass 1
+  position 7.8461533 0.46153855 0
+  orientation 1 0 0 0
+  velocity -10.769231 0 0
+  angular_velocity 0 0 3.8461533
+  material 0.5 0.2
+  damping 0 0
+  gravity_scale 1
+  allow_sleep 1
+  color 120 210 120
+end

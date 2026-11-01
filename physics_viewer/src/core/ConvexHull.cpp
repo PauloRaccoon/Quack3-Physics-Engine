@@ -305,7 +305,7 @@ bool buildConvexHull(const std::vector<physics::Vector3>& points, ConvexHull& ou
     };
     auto giveUp = [&]() {
         out = ConvexHull{};
-        return fail(error, "o fecho ficou numericamente instavel (modelo muito fino ou de proporcoes extremas)");
+        return fail(error, "o fecho ficou numericamente instavel (vertices demais quase coplanares, modelo muito fino ou de proporcoes extremas; tente um modelo menos detalhado)");
     };
     if (!mergeCoplanar) {
         triangles();

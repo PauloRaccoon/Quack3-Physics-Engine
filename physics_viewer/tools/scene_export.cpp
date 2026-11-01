@@ -6,6 +6,7 @@
 #include <string>
 
 #include "viewer/core/JointEditor.h"
+#include "viewer/core/ModelAsset.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/SceneFile.h"
 
@@ -49,9 +50,36 @@ static viewer::Scene makeEditorExample() {
     return s;
 }
 
+// Exemplo com modelos importados (V15b): cubos com textura xadrez empilhados, esfera listrada rolando e um toro
+// (côncavo: colide como o fecho) caindo. Precisa da pasta models/.
+static viewer::Scene makeModelExample(const std::string& modelDir) {
+    using namespace viewer;
+    using physics::Real;
+    using physics::Vector3;
+    Scene s = makeEmptyScene(true);
+    s.name = "Modelos importados";
+    auto add = [&](const char* file, float size, const Vector3& pos, Real mass, const Vector3& vel) {
+        auto a = std::make_shared<ModelAsset>();
+        std::string err;
+        if (!loadModelAsset(modelDir, file, size, *a, err)) { std::printf("modelo %s: %s\n", file, err.c_str()); return; }
+        SpawnParams p;
+        p.model = a;
+        p.position = pos;
+        p.mass = mass;
+        p.velocity = vel;
+        spawnBody(s, p);
+    };
+    add("cubo.obj", 1.0f, Vector3(0, Real(0.5), 0), 2, Vector3());
+    add("cubo.obj", 1.0f, Vector3(0, Real(1.5), 0), 2, Vector3());
+    add("cubo.obj", 1.0f, Vector3(0, Real(2.5), 0), 2, Vector3());
+    add("esfera.obj", 1.0f, Vector3(-8, Real(0.5), 0), 3, Vector3(9, 0, 0));
+    add("toro.obj", 1.4f, Vector3(4, 4, 2), 2, Vector3());
+    return s;
+}
+
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::printf("uso: scene_export <pasta>\n");
+    if (argc < 2 || argc > 3) {
+        std::printf("uso: scene_export <pasta> [pasta_de_modelos]\n");
         return 2;
     }
     const std::string dir = argv[1];
@@ -72,6 +100,17 @@ int main(int argc, char** argv) {
     {   // exemplo do editor (V14)
         const viewer::Scene s = makeEditorExample();
         const std::string path = dir + "/15_Meu_cenario_editor" + viewer::scenefile::kExtension;
+        std::string err;
+        if (viewer::saveSceneFile(s, path, err)) {
+            std::printf("gravou %s\n", path.c_str());
+        } else {
+            std::printf("FALHOU %s: %s\n", path.c_str(), err.c_str());
+            ++failures;
+        }
+    }
+    if (argc == 3) {   // exemplo com modelos
+        const viewer::Scene s = makeModelExample(argv[2]);
+        const std::string path = dir + "/16_Modelos_importados" + viewer::scenefile::kExtension;
         std::string err;
         if (viewer::saveSceneFile(s, path, err)) {
             std::printf("gravou %s\n", path.c_str());

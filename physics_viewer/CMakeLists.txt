@@ -35,6 +35,9 @@ add_library(viewer_core STATIC
   src/core/ConvexHull.cpp
   src/core/ObjModel.cpp
   src/core/ModelCollider.cpp
+  src/core/ModelAsset.cpp
+  src/core/TrajectoryRecorder.cpp
+  src/core/ModelImporter.cpp
   src/core/TimeControl.cpp
   src/core/BodyEditor.cpp
   src/core/PolyShapes.cpp
@@ -66,6 +69,7 @@ if(VIEWER_BUILD_TESTS)
   # Fumaça sem janela: todas as cenas por 20 s + fuzz de criar/editar/apagar/trocar de cena.
   add_executable(viewer_smoke tests/viewer_smoke.cpp)
   target_link_libraries(viewer_smoke PRIVATE viewer_core)
+  target_compile_definitions(viewer_smoke PRIVATE VIEWER_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
   add_test(NAME viewer_smoke COMMAND viewer_smoke)
 endif()
 
@@ -101,7 +105,8 @@ if(VIEWER_BUILD_APP)
   endif()
   target_link_libraries(physics_viewer PRIVATE viewer_core raylib)
   # Pasta das cenas salvas/carregadas pela aba "Cenas" (a pasta scenes/ ao lado do código).
-  target_compile_definitions(physics_viewer PRIVATE VIEWER_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes")
+  target_compile_definitions(physics_viewer PRIVATE VIEWER_SCENES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/scenes"
+                                                  VIEWER_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/models")
   # SYSTEM: o código do raygui não precisa passar pelos nossos avisos de compilação.
   target_include_directories(physics_viewer SYSTEM PRIVATE ${raygui_SOURCE_DIR}/src)
   if(MSVC)
