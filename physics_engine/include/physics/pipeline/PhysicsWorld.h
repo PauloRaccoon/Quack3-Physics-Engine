@@ -279,6 +279,7 @@ public:
     SolverSettings& solverSettings() { return solver_.settings(); }
     const SolverSettings& solverSettings() const { return solver_.settings(); }
     IntegratorSettings& integratorSettings() { return integrator_; }
+    const IntegratorSettings& integratorSettings() const { return integrator_; }
 
     /// Filtro adicional de colisão entre corpos (camadas, grupos...). Vale para
     /// pares que nascem DEPOIS; não afeta pares já existentes.

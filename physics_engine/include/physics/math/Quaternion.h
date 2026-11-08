@@ -118,6 +118,20 @@ struct Quaternion {
         normalize();
     }
 
+    /// Integração EXATA para ω constante em [0, dt] (mapa exponencial, V24):
+    ///     q ← exp(½ dt ω) ⊗ q ,   exp(½ dt ω) = (cos(θ/2), sin(θ/2) ω/|ω|),  θ = |ω| dt
+    /// A rotação aplicada tem exatamente o ângulo |ω|·dt (Euler gira um pouco a menos/mais: erro O(θ³));
+    /// o resultado já tem norma 1 (a renormalização só absorve o erro de arredondamento).
+    void integrateExp(const Vector3& omega, Real dt) {
+        *this = (fromRotationVector(omega * dt) * (*this)).normalized();
+    }
+
+    Quaternion integratedExp(const Vector3& omega, Real dt) const {
+        Quaternion r = *this;
+        r.integrateExp(omega, dt);
+        return r;
+    }
+
     Quaternion integrated(const Vector3& omega, Real dt) const {
         Quaternion r = *this;
         r.integrate(omega, dt);

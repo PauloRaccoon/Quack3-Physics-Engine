@@ -74,8 +74,11 @@ void Integrator::integratePositions(RigidBody& b, Real dt, const IntegratorSetti
     b.setLinearVelocity(v);
     b.setAngularVelocity(w);
 
-    // x ← x + v Δt ;  q ← normalize(q + ½ Δt (0,ω) q)
-    b.setPose(b.getWorldCenterOfMass() + v * dt, b.getOrientation().integrated(w, dt));
+    // x ← x + v Δt ;  q ← exp(½ Δt ω) q   (ou, no modo Euler, normalize(q + ½ Δt (0,ω) q))
+    const Quaternion q = (s.orientation == OrientationIntegration::Exponential)
+                             ? b.getOrientation().integratedExp(w, dt)
+                             : b.getOrientation().integrated(w, dt);
+    b.setPose(b.getWorldCenterOfMass() + v * dt, q);
     b.clearStepVelocityDelta();   // o passo acabou: a variação de velocidade deixa de valer
 }
 

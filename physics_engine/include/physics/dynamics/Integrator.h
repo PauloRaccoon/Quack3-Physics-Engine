@@ -5,7 +5,7 @@
 //
 //   1) integrateVelocities:  v ← v + (F/m + g) Δt ,  ω ← ω + I⁻¹ τ Δt
 //   2) (solver de impulsos modifica v e ω)
-//   3) integratePositions:   x ← x + v Δt ,          q ← q + ½ Δt (0,ω) q
+//   3) integratePositions:   x ← x + v Δt ,          q ← exp(½ Δt ω) q   (ou Euler: q + ½ Δt (0,ω) q)
 //
 // A velocidade é atualizada ANTES da posição, usando a velocidade nova — é
 // isso que torna o esquema semi-implícito (estável para osciladores).
@@ -20,7 +20,14 @@
 
 namespace physics {
 
+/// Como a orientação avança com ω constante no passo (V24).
+enum class OrientationIntegration {
+    Euler,        ///< q ← normalize(q + ½ Δt (0,ω) q): primeira ordem
+    Exponential   ///< q ← exp(½ Δt ω) q: exata para ω constante (padrão)
+};
+
 struct IntegratorSettings {
+    OrientationIntegration orientation = OrientationIntegration::Exponential;
     Real maxLinearSpeed = kMaxLinearSpeed;    ///< limite de |v| [m/s]
     Real maxAngularSpeed = kMaxAngularSpeed;  ///< limite de |ω| [rad/s]
 

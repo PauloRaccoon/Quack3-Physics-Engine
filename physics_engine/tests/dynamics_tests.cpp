@@ -302,12 +302,55 @@ static void testRotationAndGyroscopic() {
     CHECK(cOff < Real(1e-3));
 }
 
+// V24: integração da orientação por exponencial de quatérnio x Euler.
+static void testExponentialOrientation() {
+    // ω constante: após N passos a exponencial dá EXATAMENTE a rotação de ângulo |ω| N Δt; Euler fica fora.
+    const Vector3 axis = Vector3(1, 2, -0.5f).normalized();
+    const Real wmag = Real(30);   // 30 rad/s a 60 Hz: 0,5 rad por passo
+    const int n = 120;
+    RigidBodyDesc d = boxDesc();
+    d.angularDamping = 0;
+    d.gravityScale = 0;
+    auto run = [&](OrientationIntegration mode) {
+        RigidBody b(d);
+        b.setAngularVelocity(axis * wmag);
+        IntegratorSettings is;
+        is.orientation = mode;
+        is.gyroscopicTerm = false;
+        for (int i = 0; i < n; ++i) {
+            Integrator::integrateVelocities(b, Vector3::zero(), kDt, is);
+            Integrator::integratePositions(b, kDt, is);
+        }
+        return b.getOrientation();
+    };
+    const Quaternion exact = Quaternion::fromAxisAngle(axis, wmag * kDt * Real(n));
+    const Quaternion qe = run(OrientationIntegration::Exponential);
+    const Quaternion qu = run(OrientationIntegration::Euler);
+    // distância angular (0 = iguais): 2 acos(|q1·q2|)
+    auto dist = [](const Quaternion& a, const Quaternion& b) { return Real(2) * std::acos(std::fmin(Real(1), std::fabs(a.dot(b)))); };
+    CHECK(dist(qe, exact) < Real(2e-3));       // float acumula arredondamento em 120 passos
+    CHECK(dist(qu, exact) > Real(0.1));        // Euler com 0,5 rad/passo erra bastante
+    CHECK(nearlyEqual(qe.norm(), Real(1), Real(1e-5)));
+    CHECK(nearlyEqual(qu.norm(), Real(1), Real(1e-5)));
+
+    // ω = 0 e ω minúsculo: sem NaN, orientação preservada.
+    Quaternion q0 = Quaternion::fromAxisAngle(Vector3(0, 1, 0), Real(0.7));
+    CHECK(q0.integratedExp(Vector3::zero(), kDt).nearlyEqual(q0, Real(1e-6)));
+    const Quaternion tiny = q0.integratedExp(Vector3(1e-9f, 0, 0), kDt);
+    CHECK(std::isfinite(tiny.w) && tiny.nearlyEqual(q0, Real(1e-5)));
+    // para passo pequeno os dois modos concordam (primeira ordem)
+    CHECK(dist(q0.integratedExp(Vector3(0, 0, 1), Real(1e-4)), q0.integrated(Vector3(0, 0, 1), Real(1e-4))) < Real(1e-6));
+    // padrão é a exponencial
+    CHECK(IntegratorSettings().orientation == OrientationIntegration::Exponential);
+}
+
 int main() {
     testMassData();
     testRigidBodyConstruction();
     testImpulsesAndForces();
     testIntegrator();
     testRotationAndGyroscopic();
+    testExponentialOrientation();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
 }
