@@ -2,6 +2,8 @@
 // DebugDraw.cpp
 // =============================================================================
 #include "physics/debug/DebugDraw.h"
+#include "physics/geometry/CylinderShape.h"
+#include "physics/geometry/CapsuleShape.h"
 
 #include <algorithm>
 #include <cmath>
@@ -73,6 +75,48 @@ void drawPolyhedronWire(const HalfEdgeStructure& he, const Transform& xf, IDebug
     }
 }
 
+/// Anel de `seg` lados no plano ⊥ Y à altura y (espaço local), mais as 4 geratrizes entre dois anéis em y0 e y1.
+void drawRing(Real r, Real y, const Transform& xf, IDebugRenderer& rd, const DebugColor& color, int seg) {
+    for (int i = 0; i < seg; ++i) {
+        const Real a0 = kTwoPi * Real(i) / Real(seg), a1 = kTwoPi * Real(i + 1) / Real(seg);
+        rd.drawLine(xf.transformPoint(Vector3(r * std::cos(a0), y, r * std::sin(a0))), xf.transformPoint(Vector3(r * std::cos(a1), y, r * std::sin(a1))), color);
+    }
+}
+
+void drawCylinderWire(Real r, Real h, const Transform& xf, IDebugRenderer& rd, const DebugColor& color, int segments) {
+    const int seg = std::max(8, segments);
+    drawRing(r, -h, xf, rd, color, seg);
+    drawRing(r, h, xf, rd, color, seg);
+    for (int k = 0; k < 4; ++k) {
+        const Real a = kHalfPi * Real(k);
+        rd.drawLine(xf.transformPoint(Vector3(r * std::cos(a), -h, r * std::sin(a))), xf.transformPoint(Vector3(r * std::cos(a), h, r * std::sin(a))), color);
+    }
+}
+
+/// Cápsula: dois anéis nas pontas do segmento, 4 geratrizes e, em dois planos (XY e ZY), as duas meias-circunferências de cada ponta.
+void drawCapsuleWire(Real r, Real h, const Transform& xf, IDebugRenderer& rd, const DebugColor& color, int segments) {
+    const int seg = std::max(8, segments);
+    drawRing(r, -h, xf, rd, color, seg);
+    drawRing(r, h, xf, rd, color, seg);
+    for (int k = 0; k < 4; ++k) {
+        const Real a = kHalfPi * Real(k);
+        rd.drawLine(xf.transformPoint(Vector3(r * std::cos(a), -h, r * std::sin(a))), xf.transformPoint(Vector3(r * std::cos(a), h, r * std::sin(a))), color);
+    }
+    const int half = std::max(4, seg / 2);
+    for (int plane = 0; plane < 2; ++plane)
+        for (int cap = 0; cap < 2; ++cap) {
+            const Real sign = cap == 0 ? Real(1) : Real(-1);
+            for (int i = 0; i < half; ++i) {
+                const Real a0 = kPi * Real(i) / Real(half), a1 = kPi * Real(i + 1) / Real(half);
+                auto pt = [&](Real a) {
+                    const Real u = r * std::cos(a), y = sign * (h + r * std::sin(a));
+                    return xf.transformPoint(plane == 0 ? Vector3(u, y, Real(0)) : Vector3(Real(0), y, u));
+                };
+                rd.drawLine(pt(a0), pt(a1), color);
+            }
+        }
+}
+
 const DebugColor& bodyColor(const RigidBody& b, const DebugDrawSettings& s) {
     return b.isStatic() ? s.staticColor : (b.isKinematic() ? s.kinematicColor : s.dynamicColor);
 }
@@ -90,6 +134,16 @@ void debugDrawShape(const Shape& shape, const Transform& xf, IDebugRenderer& ren
         case ShapeType::Polyhedron:
             if (const HalfEdgeStructure* he = shape.getHalfEdgeStructure()) drawPolyhedronWire(*he, xf, renderer, color);
             break;
+        case ShapeType::Capsule: {
+            const CapsuleShape& c = static_cast<const CapsuleShape&>(shape);
+            drawCapsuleWire(c.getRadius(), c.getHalfHeight(), xf, renderer, color, sphereSegments);
+            break;
+        }
+        case ShapeType::Cylinder: {
+            const CylinderShape& c = static_cast<const CylinderShape&>(shape);
+            drawCylinderWire(c.getRadius(), c.getHalfHeight(), xf, renderer, color, sphereSegments);
+            break;
+        }
     }
 }
 

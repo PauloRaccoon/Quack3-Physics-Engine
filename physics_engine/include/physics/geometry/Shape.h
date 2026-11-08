@@ -18,7 +18,7 @@
 
 namespace physics {
 
-enum class ShapeType : std::uint8_t { Sphere, Box, Polyhedron };
+enum class ShapeType : std::uint8_t { Sphere, Box, Polyhedron, Capsule, Cylinder };
 
 class HalfEdgeStructure;  // declaração antecipada (ver HalfEdgeStructure.h)
 
@@ -61,6 +61,24 @@ public:
         (void)outVertices;
         (void)maxVertices;
         return 0;
+    }
+
+    /// NÚCLEO + RAIO (V18). Uma forma "arredondada" é a soma de Minkowski de um núcleo (ponto ou segmento) com uma
+    /// esfera de raio `getCoreRadius()`: esfera = ponto + r; cápsula = segmento + r. GJK/EPA rodam só no núcleo e o
+    /// gerador de contatos soma o raio depois, o que os torna EXATOS para superfícies curvas. Formas comuns: o núcleo
+    /// é a própria forma e o raio é 0 (as definições padrão abaixo).
+    virtual Real getCoreRadius() const { return Real(0); }
+    /// Ponto do núcleo mais distante na direção local `direction` (espaço local).
+    virtual Vector3 getCoreSupport(const Vector3& direction) const { return getSupport(direction); }
+
+    /// Aresta (segmento) extrema na direção local `direction`, em espaço local, quando a feature mais alinhada da forma
+    /// é uma LINHA e não um ponto nem uma face: o núcleo da cápsula; a geratriz do cilindro deitado. Usada pelo gerador de
+    /// contatos para dar dois pontos de contato (uma cápsula/cilindro deitados não balançam). false = não há segmento.
+    virtual bool getSupportSegment(const Vector3& direction, Vector3& p0, Vector3& p1) const {
+        (void)direction;
+        (void)p0;
+        (void)p1;
+        return false;
     }
 
     /// AABB justo no mundo. A implementação padrão consulta a função de

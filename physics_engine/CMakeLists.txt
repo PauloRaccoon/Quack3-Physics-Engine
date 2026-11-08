@@ -43,7 +43,7 @@ endif()
 
 if(PHYSICS_BUILD_TESTS)
   enable_testing()
-  foreach(test_name math_tests geometry_tests dynamics_tests broadphase_tests narrowphase_tests constraints_tests pipeline_tests raycast_tests fuzz_tests robustness_tests sleeping_tests events_tests)
+  foreach(test_name math_tests geometry_tests dynamics_tests broadphase_tests narrowphase_tests constraints_tests pipeline_tests raycast_tests fuzz_tests robustness_tests sleeping_tests events_tests capsule_cylinder_tests friction_tests)
     add_executable(${test_name} tests/${test_name}.cpp)
     target_link_libraries(${test_name} PRIVATE physics)
     add_test(NAME ${test_name} COMMAND ${test_name})

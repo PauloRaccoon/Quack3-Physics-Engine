@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "physics/geometry/Shape.h"
+
 namespace physics {
 
 namespace {
@@ -32,6 +34,22 @@ void ContactConstraint::prepare(const StepContext& ctx) {
 
     detail::BodyState A(*bodyA_), B(*bodyB_);
 
+    // Torção e rolagem: massas efetivas angulares e reinício dos acumulados.
+    {
+        auto round = [](const RigidBody* b) {
+            const Shape* s = b->getShape();
+            if (!s) return false;
+            const ShapeType t = s->getType();
+            return t == ShapeType::Sphere || t == ShapeType::Capsule || t == ShapeType::Cylinder;
+        };
+        spinImpulse_ = rollImpulse_[0] = rollImpulse_[1] = Real(0);
+        // Só com uma forma redonda envolvida: caixas/poliedros apoiam em vários pontos (ou arestas), e o atrito
+        // tangencial deles já resiste ao giro; somar torção ali alteraria o repouso de pilhas.
+        const bool anyRound = round(bodyA_) || round(bodyB_);
+        spinMax_ = anyRound ? std::max(cfg.spinFriction, Real(0)) * friction_ : Real(0);
+        rollMax_ = anyRound ? std::max(cfg.rollingFriction, Real(0)) * friction_ : Real(0);
+    }
+
     // Base tangente. Se há deslizamento, o 1º eixo é alinhado com a velocidade tangencial média
     // dos pontos (como no Bullet): o atrito dominante cai num único eixo e a direção da força
     // acompanha a do deslizamento. Em repouso, usa uma base arbitrária estável.
@@ -50,6 +68,16 @@ void ContactConstraint::prepare(const StepContext& ctx) {
         } else {
             computeOrthonormalBasis(normal_, tangent_[0], tangent_[1]);
         }
+    }
+
+    {
+        auto angMass = [&](const Vector3& axis) {
+            const Real k = axis.dot(A.invI * axis) + axis.dot(B.invI * axis);
+            return k > Real(1e-12) ? Real(1) / k : Real(0);
+        };
+        spinMass_ = angMass(normal_);
+        rollMass_[0] = angMass(tangent_[0]);
+        rollMass_[1] = angMass(tangent_[1]);
     }
 
     for (int i = 0; i < count_; ++i) {
@@ -148,6 +176,24 @@ void ContactConstraint::solveVelocity() {
             p.tangentImpulse[0] = a1 * s;
             p.tangentImpulse[1] = a2 * s;
         }
+    }
+
+    // --- 1b) Torção (em torno de n) e resistência à rolagem (em torno de t1, t2) ---------------------
+    if (spinMax_ > Real(0) || rollMax_ > Real(0)) {
+        Real sumN = Real(0);
+        for (int i = 0; i < count_; ++i) sumN += points_[i].normalImpulse;
+        auto angularRow = [&](const Vector3& axis, Real mass, Real limit, Real& acc) {
+            if (!(mass > Real(0)) || !(limit > Real(0))) return;
+            const Real wrel = (B.w - A.w).dot(axis);
+            const Real lim = limit * sumN;
+            const Real next = clamp(acc - mass * wrel, -lim, lim);
+            const Real applied = next - acc;
+            acc = next;
+            A.applyAngularImpulse(axis * (-applied));
+            B.applyAngularImpulse(axis * applied);
+        };
+        angularRow(normal_, spinMass_, spinMax_, spinImpulse_);
+        for (int t = 0; t < 2; ++t) angularRow(tangent_[t], rollMass_[t], rollMax_, rollImpulse_[t]);
     }
 
     // --- 2) Não-penetração ------------------------------------------------------------------------------

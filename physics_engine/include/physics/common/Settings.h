@@ -62,6 +62,12 @@ constexpr int  kMaxSubSteps   = 8;                    ///< Limite anti "espiral 
 
 constexpr Real kLinearSlop      = Real(0.005);        ///< Penetration slop [m]
 constexpr Real kVelocitySlop    = Real(0.5);          ///< Velocity slop (restituição) [m/s]
+/// Atrito de TORÇÃO: o giro em torno da normal do contato pára com torque máx. = kSpinFriction · μ · Σλn
+/// (um ponto de contato não tem braço de alavanca: sem isso uma esfera girando em Y nunca pára). [m]
+constexpr Real kSpinFriction    = Real(0.03);
+/// Resistência à ROLAGEM (formas redondas): torque máx. = kRollingFriction · μ · Σλn. Sem ela uma bola rola
+/// para sempre (deformação do contato real). [m]
+constexpr Real kRollingFriction = Real(0.02);
 constexpr Real kBaumgarteFactor = Real(0.2);          ///< Fator de correção de posição (bias)
 constexpr int  kVelocityIterations = 10;              ///< Iterações do Sequential Impulse
 constexpr int  kPositionIterations = 3;               ///< Iterações da correção de posição (NGS); 0 = Baumgarte legado

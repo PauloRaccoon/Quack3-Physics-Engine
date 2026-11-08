@@ -17,6 +17,8 @@ public:
 
     ShapeType getType() const override { return ShapeType::Sphere; }
     Vector3 getSupport(const Vector3& direction) const override;
+    Real getCoreRadius() const override { return radius_; }                          // núcleo = o centro
+    Vector3 getCoreSupport(const Vector3&) const override { return Vector3::zero(); }
     AABB computeAABB(const Transform& xf) const override;
     Real getVolume() const override;
     Vector3 getCentroid() const override { return Vector3::zero(); }

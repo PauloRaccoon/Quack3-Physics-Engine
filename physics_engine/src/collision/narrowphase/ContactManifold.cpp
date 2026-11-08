@@ -367,6 +367,114 @@ int clipFaces(const Shape& a, const Transform& xfA, const Shape& b, const Transf
     return nc;
 }
 
+/// Segmento extremo de `s` na direção de mundo `worldDir`, em coordenadas de mundo (false se a forma não tem).
+bool worldSegment(const Shape& s, const Transform& xf, const Vector3& worldDir, Vector3& p0, Vector3& p1) {
+    if (!s.getSupportSegment(xf.inverseTransformDirection(worldDir), p0, p1)) return false;
+    p0 = xf.transformPoint(p0);
+    p1 = xf.transformPoint(p1);
+    return p0.isFinite() && p1.isFinite();
+}
+
+/// V18 — SEGMENTO × FACE: o núcleo de uma cápsula (ou a geratriz de um cilindro deitado) apoiado numa face plana.
+/// Os dois extremos do segmento, recortados pela face (Cyrus–Beck contra os planos laterais), dão até 2 contatos:
+/// uma cápsula deitada no chão não balança como balançaria com um único ponto. `segIsA` diz de que lado está o
+/// segmento; `rS` é o raio do núcleo (cápsula: r; cilindro: 0). A normal do contato é a da face.
+/// Retorna 0 (sem alterar o patch) se não se aplica: a outra forma não tem face, a face não está alinhada com a
+/// normal (contato de aresta/vértice), o segmento caiu fora da face ou os dois extremos estão acima da margem.
+int clipSegmentFace(const Vector3& P0, const Vector3& P1, Real rS, bool segIsA, const Shape& other, const Transform& xfO,
+                    const Vector3& n, const ContactGeneratorSettings& st, ContactPatch& patch) {
+    Vector3 face[kMaxFace];
+    const Vector3 toward = segIsA ? -n : n;   // da outra forma para o segmento
+    const int nf = worldFace(other, xfO, toward, face);
+    if (nf < 3) return 0;
+    Vector3 N;
+    if (!newellNormal(face, nf, N)) return 0;
+    if (N.dot(toward) < st.minFaceAlignment) return 0;
+
+    // recorta o segmento pelos planos laterais da face
+    Real t0 = Real(0), t1 = Real(1);
+    for (int e = 0; e < nf; ++e) {
+        const Vector3& p = face[e];
+        const Vector3& q = face[(e + 1) % nf];
+        Vector3 sd = (q - p).cross(N);
+        if (sd.normalize() <= Real(0)) continue;
+        const Real offset = sd.dot(p);
+        const Real d0 = sd.dot(P0) - offset;
+        const Real d1 = sd.dot(P1) - offset;
+        if (d0 > Real(0) && d1 > Real(0)) return 0;   // fora desta aresta
+        if (d0 > Real(0)) t0 = std::max(t0, d0 / (d0 - d1));
+        else if (d1 > Real(0)) t1 = std::min(t1, d0 / (d0 - d1));
+        if (t0 > t1) return 0;
+    }
+    const Vector3 Q[2] = {P0 + (P1 - P0) * t0, P0 + (P1 - P0) * t1};
+    const bool single = (Q[1] - Q[0]).lengthSquared() < Real(1e-10);
+
+    int count = 0;
+    ContactPatch tmp;
+    for (int i = 0; i < (single ? 1 : 2); ++i) {
+        const Real height = N.dot(Q[i] - face[0]);   // altura do núcleo sobre o plano da face
+        const Real depth = rS - height;
+        if (depth < -st.clipMargin) continue;
+        const Vector3 onPlane = Q[i] - N * height;
+        const Vector3 onSeg = Q[i] - N * rS;   // ponto da superfície do segmento que olha para a face
+        tmp.points[count].pointA = segIsA ? onSeg : onPlane;
+        tmp.points[count].pointB = segIsA ? onPlane : onSeg;
+        tmp.points[count].depth = depth;
+        ++count;
+    }
+    if (count == 0) return 0;
+    patch.normal = segIsA ? -N : N;
+    for (int i = 0; i < count; ++i) patch.points[i] = tmp.points[i];
+    patch.count = count;
+    return count;
+}
+
+/// V18 — SEGMENTO × SEGMENTO paralelos (duas cápsulas deitadas lado a lado, cilindros deitados): dois contatos nas
+/// pontas do trecho em que os segmentos se sobrepõem. Cruzados ou inclinados: retorna 0 (vale o ponto único do EPA).
+int clipSegmentSegment(const Vector3& a0, const Vector3& a1, Real rA, const Vector3& b0, const Vector3& b1, Real rB,
+                       const Vector3& n, const ContactGeneratorSettings& st, ContactPatch& patch) {
+    Vector3 uA = a1 - a0, uB = b1 - b0;
+    const Real lA = uA.normalize(), lB = uB.normalize();
+    if (!(lA > Real(1e-6)) || !(lB > Real(1e-6))) return 0;
+    if (std::abs(uA.dot(uB)) < Real(0.998) || std::abs(uA.dot(n)) > Real(0.2)) return 0;   // não paralelos / normal não perpendicular
+    const Real tb0 = (b0 - a0).dot(uA), tb1 = (b1 - a0).dot(uA);
+    const Real lo = std::max(Real(0), std::min(tb0, tb1));
+    const Real hi = std::min(lA, std::max(tb0, tb1));
+    if (!(hi - lo > Real(1e-4))) return 0;   // quase sem sobreposição: contato de ponta, o EPA resolve
+
+    int count = 0;
+    ContactPatch tmp;
+    for (int i = 0; i < 2; ++i) {
+        const Vector3 qA = a0 + uA * (i == 0 ? lo : hi);
+        const Real tb = std::min(lB, std::max(Real(0), (qA - b0).dot(uB)));
+        const Vector3 qB = b0 + uB * tb;
+        const Real sep = (qB - qA).dot(n);
+        const Real depth = rA + rB - sep;
+        if (depth < -st.clipMargin) continue;
+        tmp.points[count].pointA = qA + n * rA;
+        tmp.points[count].pointB = qB - n * rB;
+        tmp.points[count].depth = depth;
+        ++count;
+    }
+    if (count == 0) return 0;
+    patch.normal = n;
+    for (int i = 0; i < count; ++i) patch.points[i] = tmp.points[i];
+    patch.count = count;
+    return count;
+}
+
+/// V18 — contatos de LINHA: cápsulas e cilindros deitados. Tenta segmento×segmento e segmento×face.
+int clipFeatureSegments(const Shape& a, const Transform& xfA, const Shape& b, const Transform& xfB, Real rA, Real rB,
+                        const Vector3& n, const ContactGeneratorSettings& st, ContactPatch& patch) {
+    Vector3 a0, a1, b0, b1;
+    const bool sa = worldSegment(a, xfA, n, a0, a1);
+    const bool sb = worldSegment(b, xfB, -n, b0, b1);
+    if (sa && sb) return clipSegmentSegment(a0, a1, rA, b0, b1, rB, n, st, patch);
+    if (sa) return clipSegmentFace(a0, a1, rA, true, b, xfB, n, st, patch);
+    if (sb) return clipSegmentFace(b0, b1, rB, false, a, xfA, n, st, patch);
+    return 0;
+}
+
 /// VALIDAÇÃO E REPARO do eixo de contato (rede de segurança contra GJK/EPA imprecisos).
 ///
 /// O GJK em ponto flutuante perde precisão com formas grandes: um chão de 100 m tem diferença de
@@ -523,8 +631,10 @@ bool ContactGenerator::generate(const Shape& a, const Transform& xfA, const Shap
     patch.count = 1;
 
     // Várias pontas por clipping, se ambas as formas têm faces planas.
-    if (st.useFaceClipping && rA == Real(0) && rB == Real(0)) {
-        clipFaces(a, xfA, b, xfB, n, st, patch);   // não alterou o patch se retornou 0
+    if (st.useFaceClipping) {
+        // Faces planas (caixa, poliedro, tampa de cilindro); se não se aplica, contatos de linha (V18).
+        const bool done = rA == Real(0) && rB == Real(0) && clipFaces(a, xfA, b, xfB, n, st, patch) > 0;
+        if (!done) clipFeatureSegments(a, xfA, b, xfB, rA, rB, n, st, patch);   // não altera o patch se retornou 0
     }
     return true;
 }

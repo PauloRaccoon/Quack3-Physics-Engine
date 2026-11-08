@@ -31,6 +31,14 @@
 // o PGS então empurra cada impulso na direção de −K⁻¹v, e não de −v, e as
 // direções de atrito dos 4 cantos de uma caixa divergem.)
 //
+// TORÇÃO E ROLAGEM (V19): o cone de Coulomb só atua nos pontos de contato, e uma esfera (ou a base de uma
+// cápsula) toca em UM ponto: o giro em torno da normal e a rolagem não encontram resistência alguma. Por
+// isso há duas linhas angulares por contato, com limite proporcional a μ·Σλn:
+//   torção  : ωrel · n   = 0,  |L| ≤ kSpinFriction    · μ · Σλn
+//   rolagem : ωrel · t_i = 0,  |L| ≤ kRollingFriction · μ · Σλn
+// (as duas só quando um dos corpos é esfera, cápsula ou cilindro)
+// (não são "warm-started": recomeçam do zero a cada passo, e o limite já vem do Σλn do warm start normal.)
+//
 // WARM STARTING: os impulsos acumulados ficam nos ContactPoints do manifold
 // (que persiste entre quadros). O de atrito é guardado como VETOR de mundo e
 // reprojetado na base tangente de cada quadro.
@@ -79,6 +87,10 @@ private:
     Vector3 tangent_[2];
     Real friction_ = 0;
     Real restitution_ = 0;
+    // Atrito de torção (eixo n) e resistência à rolagem (eixos t1, t2): limites de torque·Δt e acumulados do passo.
+    Real spinMax_ = 0, rollMax_ = 0;
+    Real spinImpulse_ = 0, rollImpulse_[2] = {0, 0};
+    Real spinMass_ = 0, rollMass_[2] = {0, 0};
     Point points_[kMaxManifoldPoints];
     int count_ = 0;
 };

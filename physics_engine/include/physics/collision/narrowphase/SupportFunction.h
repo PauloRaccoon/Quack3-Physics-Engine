@@ -9,8 +9,8 @@
 // contato em cada forma ("witness points") a partir de coordenadas
 // baricêntricas do simplex/politopo.
 //
-// Esferas são tratadas como NÚCLEO + RAIO: o núcleo é um único ponto (o
-// centro) e o raio é somado pelo gerador de contatos. Isso torna GJK/EPA
+// Formas arredondadas são tratadas como NÚCLEO + RAIO (Shape::getCoreRadius): o núcleo da esfera é um ponto (o
+// centro), o da cápsula é um segmento, e o raio é somado pelo gerador de contatos. Isso torna GJK/EPA
 // exatos para esferas (sem aproximar uma superfície curva por um politopo).
 // =============================================================================
 #pragma once
@@ -60,13 +60,10 @@ public:
     const Shape& getShapeB() const { return *shapeB_; }
 
 private:
-    static Real coreRadius(const Shape& s) {
-        return s.getType() == ShapeType::Sphere ? static_cast<const SphereShape&>(s).getRadius()
-                                                : Real(0);
-    }
-    static Vector3 coreSupport(const Shape& s, const Transform& xf, Real radius, const Vector3& d) {
-        // Esfera: o núcleo é o centro (raio > 0 só ocorre para esferas).
-        return radius > Real(0) ? xf.position : s.getWorldSupport(xf, d);
+    static Real coreRadius(const Shape& s) { return s.getCoreRadius(); }
+    static Vector3 coreSupport(const Shape& s, const Transform& xf, Real /*radius*/, const Vector3& d) {
+        // Núcleo da forma: esfera = centro; cápsula = segmento; as demais = a própria forma.
+        return xf.transformPoint(s.getCoreSupport(xf.inverseTransformDirection(d)));
     }
 
     const Shape* shapeA_;

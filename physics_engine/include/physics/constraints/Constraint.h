@@ -45,6 +45,9 @@ struct SolverSettings {
     Real velocitySlop = kVelocitySlop;     ///< velocity slop: abaixo disso não há restituição [m/s]
     Real maxBiasVelocity = Real(4);        ///< teto da velocidade de correção de posição [m/s]
     bool warmStarting = true;              ///< reinjeta os impulsos do quadro anterior
+    /// Atrito de torção e resistência à rolagem [m] (comprimentos que multiplicam μ·Σλn: ver Settings.h). 0 desliga.
+    Real spinFriction = kSpinFriction;
+    Real rollingFriction = kRollingFriction;
 };
 
 /// Dados do passo atual entregues a prepare().
