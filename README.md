@@ -49,8 +49,10 @@ projeto/
 | V15b | importar modelo 3D na janela: aba Adicionar > modelo 3D (lista de `models/`, tamanho, textura, aviso de côncavo, fio do fecho), malha com textura desenhada, `.scene` com linha `model` | feita (janela não testada por mim; 1669 + 3825 verificações em float, double e ASan) |
 | V16 | gravar a trajetória e os quatérnios em CSV (painel na coluna esquerda, F7) e modo apresentação (F5: tela limpa com quatérnio grande; F6: câmera giratória) | feita (janela não testada por mim; 1692 + 3833 verificações em float, double e ASan) |
 | V17 | corrige as sobreposições dos painéis (alturas calculadas e testadas, texto que se ajusta), importar o próprio `.obj` (arrastar e soltar na janela ou colar o caminho) e escolher o colisor do modelo (fecho, caixa ou esfera) | feita (janela não testada por mim; 1778 + 4176 verificações em float, double e ASan) |
+| V18 | **cápsula e cilindro** no motor (`CapsuleShape`, `CylinderShape`: suporte, inércia, AABB, contatos de 1 e 2 pontos para deitados, raycast, debug draw) e no viewer (criar, usar como colisor de modelos com ajuste automático e fino, `.scene` com `shape capsule`/`shape cylinder`) | feita (janela não testada por mim; motor: 14 suítes, 1010 verificações novas; viewer: 1890 + 4294 verificações em float, double e ASan) |
+| V19 | **correção do atrito**: atrito de torção (giro em torno da normal) e resistência à rolagem em esfera, cápsula e cilindro (antes uma bola girando em Y ou rolando nunca parava); **WASD** move a câmera pelo cenário (E/Q sobem e descem, Shift acelera) | feita (janela não testada por mim; motor: 15 suítes, 17 verificações novas; viewer: 1903 + 4294 em float, double e ASan) |
 
-**Ainda não existe** (ver seção 8): colisão contínua (CCD), cápsula/cilindro/forma composta,
+**Ainda não existe** (ver seção 8): colisão contínua (CCD), forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
 
 ---
@@ -378,9 +380,9 @@ Limitações atuais:
   a cena: pêndulos e correntes rápidas pedem passo menor ou `positionIterations = 0`.
 - **Juntas só de igualdade** (bola-soquete, distância, dobradiça): sem limites angulares,
   motores, molas ou quebra.
-- **Só esfera, caixa e poliedro convexo.** Sem cápsula, cilindro, forma composta, casco convexo
-  automático ou malha estática (cenário côncavo).
-- **Atrito e restituição ficam no corpo**, não na forma.
+- **Esfera, caixa, cápsula, cilindro e poliedro convexo** (cápsula e cilindro desde a V18, eixo Y
+  local). Sem forma composta (várias formas num corpo), cone, elipsoide ou malha estática (cenário côncavo).
+- **Atrito e restituição ficam no corpo**, não na forma. Desde a V19 há atrito de torção e resistência à rolagem para formas redondas (`SolverSettings::spinFriction` e `rollingFriction`, em metros, vezes μ·Σλn; 0 desliga): antes o giro em Y de uma esfera nunca parava, pois o cone de Coulomb só atua nos pontos de contato e a esfera toca em um só.
 - **Sem API C** (`extern "C"`) nem biblioteca compartilhada: o motor se usa por C++.
 - **Determinismo entre plataformas** não garantido (ver seção 4).
 - **Cenas caóticas divergem com e sem *sleeping*.** Dormir congela cada corpo onde estava; numa chuva de
@@ -421,7 +423,7 @@ Roteiro, em etapas pequenas (cada uma deixa o viewer funcionando):
 | **V15. Importar objeto 3D com textura** (feita: V15a + V15b) | Carregar `.obj` (+ `.mtl`) com textura (`.png`/`.jpg`) numa cena: o modelo é desenhado com a textura da raylib e a colisão usa o **fecho convexo** dos vértices (algoritmo próprio, sem biblioteca; o motor só aceita formas convexas), com opção de caixa/esfera envolvente. Escala, massa e orientação inicial por quatérnio. Entra no arquivo de cena (V12). | grande (dividida em V15a fecho convexo + testes e V15b modelo/textura na janela) |
 | **V16. Opcional, para o relatório** (feita) | Exportar a trajetória e os quatérnios em CSV para gráficos, e um modo apresentação. | pequena |
 | **V17. Painéis sem sobreposição, seu próprio modelo e colisor** (feita) | Alturas dos painéis calculadas do conteúdo (e testadas) e texto que sempre cabe na coluna; **importar o seu `.obj`** (arrastar para a janela ou colar o caminho; copia `.mtl` e texturas para `models/`); escolher a **forma física** do modelo: fecho, caixa ou esfera. | média |
-| **V18. Cápsula e cilindro** (próxima) | **No motor**: `CapsuleShape` e `CylinderShape` (função de suporte, inércia, AABB, contatos de face/segmento, raycast, debug draw), e no viewer: caixa de seleção para criá-las e como colisor de modelos importados (ex.: cápsula para o corpo de uma pessoa), com altura e raio ajustáveis e ajuste automático ao modelo; `.scene` com `shape capsule`/`shape cylinder`. | grande (motor + viewer) |
+| **V18. Cápsula e cilindro** (feita) | **No motor**: `CapsuleShape` e `CylinderShape` (função de suporte, inércia, AABB, contatos de face/segmento, raycast, debug draw), e no viewer: caixa de seleção para criá-las e como colisor de modelos importados (ex.: cápsula para o corpo de uma pessoa), com altura e raio ajustáveis e ajuste automático ao modelo; `.scene` com `shape capsule`/`shape cylinder`. | grande (motor + viewer) |
 
 Observações do planejamento:
 
