@@ -37,6 +37,8 @@ const char* colliderKindName(ColliderKind kind) {
         case ColliderKind::Hull: return "fecho convexo";
         case ColliderKind::Box: return "caixa";
         case ColliderKind::Sphere: return "esfera";
+        case ColliderKind::Capsule: return "capsula";
+        case ColliderKind::Cylinder: return "cilindro";
     }
     return "?";
 }
@@ -46,8 +48,17 @@ bool makeImportedShape(const ObjModel& model, float scale, ImportedShape& out, s
 }
 
 bool makeImportedShape(const ObjModel& model, float scale, ColliderKind kind, ImportedShape& out, std::string& error) {
+    return makeImportedShape(model, scale, kind, ColliderTuning{}, out, error);
+}
+
+bool makeImportedShape(const ObjModel& model, float scale, ColliderKind kind, const ColliderTuning& tuning, ImportedShape& out,
+                       std::string& error) {
     out = ImportedShape{};
-    if (kind == ColliderKind::Box || kind == ColliderKind::Sphere) {
+    if (kind == ColliderKind::Box || kind == ColliderKind::Sphere || kind == ColliderKind::Capsule || kind == ColliderKind::Cylinder) {
+        if (!std::isfinite(tuning.radiusScale) || !std::isfinite(tuning.heightScale)) {
+            error = "ajuste de raio/altura invalido";
+            return false;
+        }
         if (!std::isfinite(scale) || scale < modellimits::kMinScale || scale > modellimits::kMaxScale) {
             error = "escala invalida (use de 0,001 a 1000)";
             return false;
@@ -63,6 +74,8 @@ bool makeImportedShape(const ObjModel& model, float scale, ColliderKind kind, Im
             return false;
         }
         const Vec3f mid{(lo.x + hi.x) * 0.5f, (lo.y + hi.y) * 0.5f, (lo.z + hi.z) * 0.5f};
+        const float ext[3] = {hi.x - lo.x, hi.y - lo.y, hi.z - lo.z};
+        out.longestAxis = ext[0] >= ext[1] && ext[0] >= ext[2] ? 0 : (ext[1] >= ext[2] ? 1 : 2);
         out.offset = Vector3(static_cast<Real>(mid.x) * Real(scale), static_cast<Real>(mid.y) * Real(scale), static_cast<Real>(mid.z) * Real(scale));
         out.scale = scale;
         out.collider = kind;
@@ -82,6 +95,25 @@ bool makeImportedShape(const ObjModel& model, float scale, ColliderKind kind, Im
                 out.colliderVolume = 8.0 * static_cast<double>(half.x) * static_cast<double>(half.y) * static_cast<double>(half.z);
                 out.hullVertices = 8;
                 out.hullFaces = 6;
+            } else if (kind == ColliderKind::Capsule || kind == ColliderKind::Cylinder) {
+                // Ajuste automático à caixa envolvente (eixo Y): raio = a maior meia-aresta de X e Z; altura = a de Y.
+                const float rs = std::min(kMaxTuning, std::max(kMinTuning, tuning.radiusScale));
+                const float hs = std::min(kMaxTuning, std::max(kMinTuning, tuning.heightScale));
+                const float hx = (hi.x - lo.x) * 0.5f * scale, hy = (hi.y - lo.y) * 0.5f * scale, hz = (hi.z - lo.z) * 0.5f * scale;
+                const float r0 = std::max(0.005f, std::max(hx, hz));
+                const float radius = std::max(0.005f, r0 * rs);
+                if (kind == ColliderKind::Capsule) {
+                    const float h0 = std::max(0.0f, hy - r0);   // meia-altura do SEGMENTO (as pontas arredondadas somam r)
+                    const float hh = h0 * hs;
+                    out.shape = std::make_shared<CapsuleShape>(static_cast<Real>(radius), static_cast<Real>(hh));
+                    out.axisHalfHeight = hh;
+                } else {
+                    const float hh = std::max(0.005f, hy * hs);
+                    out.shape = std::make_shared<CylinderShape>(static_cast<Real>(radius), static_cast<Real>(hh));
+                    out.axisHalfHeight = hh;
+                }
+                out.axisRadius = radius;
+                out.colliderVolume = static_cast<double>(out.shape->getVolume());
             } else {
                 double r2 = 0;
                 for (std::size_t i = 0; i < used.size(); ++i)

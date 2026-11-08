@@ -13,8 +13,9 @@
 
 namespace viewer {
 
-enum class SpawnKind { Box = 0, Sphere = 1, Tetrahedron = 2, Octahedron = 3, Prism = 4, Pyramid = 5 };
-constexpr int kSpawnKindCount = 6;
+enum class SpawnKind { Box = 0, Sphere = 1, Tetrahedron = 2, Octahedron = 3, Prism = 4, Pyramid = 5,
+                            Capsule = 6, Cylinder = 7 };   // V18: capsula e cilindro (eixo Y)
+constexpr int kSpawnKindCount = 8;
 
 /// Nome curto (sem acentos: a fonte padrão da raylib é ASCII).
 const char* spawnKindName(SpawnKind kind);
@@ -50,6 +51,10 @@ struct SpawnParams {
     bool isStatic = false;
     /// V14: só para Box. Aresta de cada eixo = size · boxScale (escala limitada a [0,1; 10], aresta a [0,05; 40] m).
     physics::Vector3 boxScale = physics::Vector3(1, 1, 1);
+    /// V18: só para Capsule/Cylinder. Raio = size/2 · radiusScale; meia-altura total (cilindro) ou do segmento
+    /// (capsula) = size/2 · heightScale. Escalas em [0,1; 10].
+    physics::Real radiusScale = physics::Real(0.5);
+    physics::Real heightScale = physics::Real(2);
     /// V15b: se definido, o corpo usa a forma de colisão (fecho) deste modelo importado e é desenhado com a malha
     /// dele; `kind`, `size` e `boxScale` são ignorados (o tamanho já está na escala do asset).
     std::shared_ptr<const ModelAsset> model;

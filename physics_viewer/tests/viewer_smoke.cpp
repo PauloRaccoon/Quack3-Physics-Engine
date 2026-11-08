@@ -156,6 +156,8 @@ static void fuzz(unsigned seed) {
                 p.kind = static_cast<SpawnKind>(r.pick(kSpawnKindCount));
                 p.size = r.range(Real(-1), Real(10));
                 p.mass = r.range(Real(-1), Real(500));
+                p.radiusScale = r.range(Real(-1), Real(15));   // V18
+                p.heightScale = r.range(Real(-1), Real(15));
                 p.position = Vector3(r.range(-15, 15), r.range(-3, 20), r.range(-15, 15));
                 p.orientation = physics::Quaternion(r.range(-1, 1), r.range(-1, 1), r.range(-1, 1), r.range(-1, 1));
                 p.velocity = Vector3(r.range(-100, 100), r.range(-100, 100), r.range(-100, 100));

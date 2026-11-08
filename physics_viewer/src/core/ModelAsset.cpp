@@ -42,14 +42,14 @@ std::vector<std::string> listModelFiles(const std::string& dir) {
 }
 
 bool makeModelAsset(const std::shared_ptr<const ObjModel>& obj, const std::string& file, const std::string& baseDir,
-                    float scale, ModelAsset& out, std::string& error, ColliderKind collider) {
+                    float scale, ModelAsset& out, std::string& error, ColliderKind collider, const ColliderTuning& tuning) {
     out = ModelAsset{};
     if (!obj) {
         error = "modelo vazio";
         return false;
     }
     ImportedShape is;
-    if (!makeImportedShape(*obj, scale, collider, is, error)) return false;
+    if (!makeImportedShape(*obj, scale, collider, tuning, is, error)) return false;
     out.obj = obj;
     out.file = file;
     out.baseDir = baseDir;
@@ -62,11 +62,13 @@ bool makeModelAsset(const std::shared_ptr<const ObjModel>& obj, const std::strin
     out.concave = is.concave;
     out.collider = is.collider;
     out.fill = is.fill;
+    out.tuning = tuning;
+    out.longestAxis = is.longestAxis;
     return true;
 }
 
 bool loadModelAsset(const std::string& modelDir, const std::string& file, float targetSize, ModelAsset& out,
-                    std::string& error, std::string* warning, ColliderKind collider) {
+                    std::string& error, std::string* warning, ColliderKind collider, const ColliderTuning& tuning) {
     out = ModelAsset{};
     std::string rel = file;
     std::replace(rel.begin(), rel.end(), '\\', '/');
@@ -77,7 +79,7 @@ bool loadModelAsset(const std::string& modelDir, const std::string& file, float 
     auto obj = std::make_shared<ObjModel>();
     if (!loadObjFile((fs::path(modelDir) / rel).string(), *obj, error, warning)) return false;
     const float scale = targetSize > 0.0f ? autoScale(*obj, targetSize) : 1.0f;
-    return makeModelAsset(obj, rel, modelBaseDir(modelDir, rel), scale, out, error, collider);
+    return makeModelAsset(obj, rel, modelBaseDir(modelDir, rel), scale, out, error, collider, tuning);
 }
 
 ModelAsset attachModel(const std::shared_ptr<const ObjModel>& obj, const std::string& file, const std::string& baseDir,
@@ -100,6 +102,10 @@ ModelAsset attachModel(const std::shared_ptr<const ObjModel>& obj, const std::st
         a.collider = ColliderKind::Box;
     } else if (shape && shape->getType() == physics::ShapeType::Sphere) {
         a.collider = ColliderKind::Sphere;
+    } else if (shape && shape->getType() == physics::ShapeType::Capsule) {   // V18
+        a.collider = ColliderKind::Capsule;
+    } else if (shape && shape->getType() == physics::ShapeType::Cylinder) {
+        a.collider = ColliderKind::Cylinder;
     }
     return a;
 }

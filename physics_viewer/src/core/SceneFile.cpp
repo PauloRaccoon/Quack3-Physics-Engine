@@ -17,6 +17,8 @@
 
 #include "physics/geometry/BoxShape.h"
 #include "physics/geometry/SphereShape.h"
+#include "physics/geometry/CapsuleShape.h"
+#include "physics/geometry/CylinderShape.h"
 #include "viewer/core/ModelAsset.h"
 #include "viewer/core/PolyShapes.h"
 #include "viewer/core/WorldEditor.h"
@@ -95,9 +97,10 @@ struct BodyDraft {
     int line = 0;
     BodyType type = BodyType::Dynamic;
     bool hasType = false;
-    enum class Shape { Unset, Box, Sphere, None, Poly } shape = Shape::Unset;
+    enum class Shape { Unset, Box, Sphere, None, Poly, Capsule, Cylinder } shape = Shape::Unset;
     Vector3 half;
     Real radius = 0;
+    Real halfHeight = 0;   // V18: Capsule (meia-altura do segmento) e Cylinder (meia-altura)
     std::vector<Vector3> verts;
     std::vector<std::vector<int>> faces;
     Real mass = 0;
@@ -159,13 +162,19 @@ void parseBodyLine(const Tokens& k, BodyDraft& d) {
             k.need(3);
             d.shape = BodyDraft::Shape::Sphere;
             d.radius = checkRange(ln, "raio", k.real(2), Real(0.001), Real(1000));
+        } else if (k.t[1] == "capsule" || k.t[1] == "cylinder") {   // V18: shape capsule|cylinder <raio> <meia-altura>
+            k.need(4);
+            const bool cap = k.t[1] == "capsule";
+            d.shape = cap ? BodyDraft::Shape::Capsule : BodyDraft::Shape::Cylinder;
+            d.radius = checkRange(ln, "raio", k.real(2), Real(0.001), Real(1000));
+            d.halfHeight = checkRange(ln, "meia-altura", k.real(3), cap ? Real(0) : Real(0.001), Real(1000));
         } else if (k.t[1] == "none") {
             k.need(2);
             d.shape = BodyDraft::Shape::None;
         } else if (k.t[1] == "poly") {
             k.need(2);
             d.shape = BodyDraft::Shape::Poly;
-        } else fail(ln, "shape deve ser box, sphere, none ou poly");
+        } else fail(ln, "shape deve ser box, sphere, capsule, cylinder, none ou poly");
     } else if (key == "vertex") {
         k.need(4);
         if (d.shape != BodyDraft::Shape::Poly) fail(ln, "vertex so vale depois de 'shape poly'");
@@ -283,6 +292,12 @@ std::string serializeScene(const Scene& scene) {
             o << "  shape box " << vec(static_cast<const BoxShape*>(shape)->getHalfExtents()) << "\n";
         } else if (shape->getType() == ShapeType::Sphere) {
             o << "  shape sphere " << num(static_cast<const SphereShape*>(shape)->getRadius()) << "\n";
+        } else if (shape->getType() == ShapeType::Capsule) {   // V18
+            const auto* cs = static_cast<const CapsuleShape*>(shape);
+            o << "  shape capsule " << num(cs->getRadius()) << " " << num(cs->getHalfHeight()) << "\n";
+        } else if (shape->getType() == ShapeType::Cylinder) {
+            const auto* cs = static_cast<const CylinderShape*>(shape);
+            o << "  shape cylinder " << num(cs->getRadius()) << " " << num(cs->getHalfHeight()) << "\n";
         } else {
             const HalfEdgeStructure& topo = static_cast<const PolyhedronShape*>(shape)->getTopology();
             o << "  shape poly\n";
@@ -520,6 +535,18 @@ bool parseScene(const std::string& text, Scene& out, std::string& error, const s
                         sb.kind = ShapeKind::Sphere;
                         sb.radius = static_cast<float>(d.radius);
                         break;
+                    case BodyDraft::Shape::Capsule:
+                        rd.shape = std::make_shared<CapsuleShape>(d.radius, d.halfHeight);
+                        sb.kind = ShapeKind::Capsule;
+                        sb.radius = static_cast<float>(d.radius);
+                        sb.halfHeight = static_cast<float>(d.halfHeight);
+                        break;
+                    case BodyDraft::Shape::Cylinder:
+                        rd.shape = std::make_shared<CylinderShape>(d.radius, d.halfHeight);
+                        sb.kind = ShapeKind::Cylinder;
+                        sb.radius = static_cast<float>(d.radius);
+                        sb.halfHeight = static_cast<float>(d.halfHeight);
+                        break;
                     case BodyDraft::Shape::None:
                         sb.kind = ShapeKind::Sphere;   // pivô: só uma bolinha cinza
                         sb.radius = 0.12f;
@@ -553,8 +580,9 @@ bool parseScene(const std::string& text, Scene& out, std::string& error, const s
                 fail(d.line, where + e.what());
             }
             if (d.hasModel) {   // V15b: a malha do .obj só para DESENHAR; sem o arquivo o corpo vira poliedro comum
-                if (d.shape != BodyDraft::Shape::Poly && d.shape != BodyDraft::Shape::Box && d.shape != BodyDraft::Shape::Sphere)
-                    fail(d.modelLine, "'model' so vale com 'shape poly', 'shape box' ou 'shape sphere'");
+                if (d.shape != BodyDraft::Shape::Poly && d.shape != BodyDraft::Shape::Box && d.shape != BodyDraft::Shape::Sphere &&
+                    d.shape != BodyDraft::Shape::Capsule && d.shape != BodyDraft::Shape::Cylinder)
+                    fail(d.modelLine, "'model' so vale com 'shape poly', box, sphere, capsule ou cylinder");
                 if (!(d.modelScale >= Real(modellimits::kMinScale) && d.modelScale <= Real(modellimits::kMaxScale)))
                     fail(d.modelLine, "escala do modelo fora da faixa [0.001, 1000]");
                 if (!d.modelOffset.isWithin(Real(1e4))) fail(d.modelLine, "deslocamento do modelo fora da faixa");

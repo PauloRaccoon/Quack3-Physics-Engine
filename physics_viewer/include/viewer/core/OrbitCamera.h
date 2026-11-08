@@ -41,6 +41,15 @@ public:
     /// restante por chamada, independente do FPS. dt <= 0 ou valores não finitos: não muda nada.
     void followTarget(const Vec3f& goal, float dt, float rate = 10.0f);
 
+    /// V19 (WASD): deslocamento do alvo em `dt` segundos. `forward`, `right`, `up` em [-1, 1] (W/S, D/A, E/Q).
+    /// "Frente" é a direção em que a câmera olha projetada no chão (o pitch não faz a câmera mergulhar), "direita"
+    /// é a da tela. Velocidade = (kMoveBase + kMovePerMeter · distância) m/s, vezes `boost`: quanto mais longe a
+    /// câmera, mais rápido (o mesmo "tempo para atravessar a tela"). Entradas não finitas ou dt <= 0: zero.
+    Vec3f moveDelta(float forward, float right, float up, float dt, float boost = 1.0f) const;
+
+    static constexpr float kMoveBase = 3.0f;        ///< m/s com a câmera na distância mínima
+    static constexpr float kMovePerMeter = 0.8f;    ///< m/s a mais por metro de distância
+
     Vec3f position() const;
 
     float getYaw() const { return yaw_; }

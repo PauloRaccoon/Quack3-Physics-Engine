@@ -23,14 +23,15 @@ namespace viewer {
 
 struct ModelAsset;   // V15b (ModelAsset.h)
 
-enum class ShapeKind { Box, Sphere, Polyhedron };
+enum class ShapeKind { Box, Sphere, Polyhedron, Capsule, Cylinder };   // V18: Capsule e Cylinder (eixo Y local)
 
 /// O que a janela precisa saber para desenhar um corpo do mundo.
 struct SceneBody {
     physics::BodyId id = physics::kInvalidBodyId;
     ShapeKind kind = ShapeKind::Box;
     Vec3f halfExtents;        ///< Box: meias-arestas [m]
-    float radius = 0.0f;      ///< Sphere: raio [m]
+    float radius = 0.0f;      ///< Sphere, Capsule, Cylinder: raio [m]
+    float halfHeight = 0.0f;  ///< Capsule: meia-altura do segmento; Cylinder: meia-altura [m] (V18)
     /// Polyhedron: a forma (vértices e faces vêm de poly->getTopology()). Mantém a forma viva.
     std::shared_ptr<const physics::PolyhedronShape> poly;
     /// V15b: modelo 3D importado (malha + textura para desenhar). A forma de colisão continua sendo `poly`

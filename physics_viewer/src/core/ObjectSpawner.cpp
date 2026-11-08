@@ -9,6 +9,8 @@
 #include <memory>
 
 #include "physics/geometry/BoxShape.h"
+#include "physics/geometry/CapsuleShape.h"
+#include "physics/geometry/CylinderShape.h"
 #include "physics/geometry/SphereShape.h"
 #include "viewer/core/PolyShapes.h"
 
@@ -36,6 +38,8 @@ const char* spawnKindName(SpawnKind kind) {
         case SpawnKind::Octahedron: return "octaedro";
         case SpawnKind::Prism: return "prisma";
         case SpawnKind::Pyramid: return "piramide";
+        case SpawnKind::Capsule: return "capsula";
+        case SpawnKind::Cylinder: return "cilindro";
     }
     return "?";
 }
@@ -63,7 +67,7 @@ Quaternion orientationFromAxisAngle(const Vector3& axis, Real angle, bool* ok) {
 BodyId spawnBody(Scene& scene, const SpawnParams& p) {
     if (!scene.world) return kInvalidBodyId;
     if (!std::isfinite(p.size) || !std::isfinite(p.mass) || !std::isfinite(p.friction) || !std::isfinite(p.restitution) ||
-        !p.boxScale.isFinite() || !p.position.isFinite() || !p.orientation.isFinite() || !p.velocity.isFinite() || !p.angularVelocity.isFinite())
+        !p.boxScale.isFinite() || !std::isfinite(p.radiusScale) || !std::isfinite(p.heightScale) || !p.position.isFinite() || !p.orientation.isFinite() || !p.velocity.isFinite() || !p.angularVelocity.isFinite())
         return kInvalidBodyId;
     const Real n = p.orientation.norm();
     if (!(n > Real(1e-6))) return kInvalidBodyId;
@@ -84,6 +88,18 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
                 d.shape = p.model->shape;
                 sb.kind = ShapeKind::Sphere;
                 sb.radius = static_cast<float>(static_cast<const SphereShape&>(ms).getRadius());
+            } else if (ms.getType() == ShapeType::Capsule) {   // V18
+                d.shape = p.model->shape;
+                sb.kind = ShapeKind::Capsule;
+                const auto& cs = static_cast<const CapsuleShape&>(ms);
+                sb.radius = static_cast<float>(cs.getRadius());
+                sb.halfHeight = static_cast<float>(cs.getHalfHeight());
+            } else if (ms.getType() == ShapeType::Cylinder) {
+                d.shape = p.model->shape;
+                sb.kind = ShapeKind::Cylinder;
+                const auto& cs = static_cast<const CylinderShape&>(ms);
+                sb.radius = static_cast<float>(cs.getRadius());
+                sb.halfHeight = static_cast<float>(cs.getHalfHeight());
             } else {
                 sb.poly = std::dynamic_pointer_cast<const PolyhedronShape>(p.model->shape);
                 if (!sb.poly) return kInvalidBodyId;
@@ -107,6 +123,27 @@ BodyId spawnBody(Scene& scene, const SpawnParams& p) {
                 sb.kind = ShapeKind::Sphere;
                 sb.radius = static_cast<float>(size) * 0.5f;
                 break;
+            case SpawnKind::Capsule:
+            case SpawnKind::Cylinder:
+            {
+                const Real rs = clampTo(p.radiusScale, spawnlimits::kMinBoxScale, spawnlimits::kMaxBoxScale);
+                const Real hs = clampTo(p.heightScale, spawnlimits::kMinBoxScale, spawnlimits::kMaxBoxScale);
+                const Real r = clampTo(size * rs, Real(0.02), Real(20));
+                const Real hh = clampTo(size * hs * Real(0.5), Real(0.02), Real(20));
+                if (p.kind == SpawnKind::Capsule) {
+                    // altura total = 2·(hh + r); hh é a meia-altura do segmento (pode ser 0: vira esfera)
+                    const Real seg = std::max(Real(0), hh - r);
+                    d.shape = std::make_shared<CapsuleShape>(r, seg);
+                    sb.kind = ShapeKind::Capsule;
+                    sb.halfHeight = static_cast<float>(seg);
+                } else {
+                    d.shape = std::make_shared<CylinderShape>(r, hh);
+                    sb.kind = ShapeKind::Cylinder;
+                    sb.halfHeight = static_cast<float>(hh);
+                }
+                sb.radius = static_cast<float>(r);
+                break;
+            }
             case SpawnKind::Tetrahedron:
                 sb.poly = makeTetrahedron(Real(0.45) * size);
                 break;

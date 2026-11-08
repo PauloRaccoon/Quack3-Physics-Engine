@@ -248,6 +248,34 @@ void drawModelMesh(const viewer::SceneBody& body, const viewer::Mat4f& m) {
     rlEnableBackfaceCulling();
 }
 
+/// V18: cápsula/cilindro de eixo Y local, na origem do corpo. `grow` aumenta um pouco (contorno de seleção).
+void drawAxisWire(viewer::ShapeKind kind, float r, float hh, Color c, float grow = 1.0f) {
+    r *= grow;
+    if (kind == viewer::ShapeKind::Capsule) {
+        const float seg = hh * grow;
+        if (seg < 1e-4f) DrawSphereWires(Vector3{0, 0, 0}, r, 10, 14, c);   // segmento nulo: raylib dividiria por zero
+        else DrawCapsuleWires(Vector3{0, -seg, 0}, Vector3{0, seg, 0}, r, 14, 8, c);
+    } else {
+        const float h = hh * grow;
+        DrawCylinderWires(Vector3{0, -h, 0}, r, r, 2.0f * h, 18, c);
+    }
+}
+
+void drawAxisSolid(const viewer::SceneBody& body, Color fill, Color wire) {
+    if (body.kind == viewer::ShapeKind::Capsule) {
+        if (body.halfHeight < 1e-4f) {
+            DrawSphereEx(Vector3{0, 0, 0}, body.radius, 16, 16, fill);
+            DrawSphereWires(Vector3{0, 0, 0}, body.radius * 1.002f, 16, 16, wire);
+        } else {
+            DrawCapsule(Vector3{0, -body.halfHeight, 0}, Vector3{0, body.halfHeight, 0}, body.radius, 18, 10, fill);
+            DrawCapsuleWires(Vector3{0, -body.halfHeight, 0}, Vector3{0, body.halfHeight, 0}, body.radius * 1.002f, 18, 10, wire);
+        }
+    } else {
+        DrawCylinder(Vector3{0, -body.halfHeight, 0}, body.radius, body.radius, 2.0f * body.halfHeight, 24, fill);
+        DrawCylinderWires(Vector3{0, -body.halfHeight, 0}, body.radius * 1.002f, body.radius * 1.002f, 2.0f * body.halfHeight, 24, wire);
+    }
+}
+
 /// Desenha um corpo na pose `m` (matriz de modelo vinda do quatérnio do motor).
 void drawBody(const viewer::SceneBody& body, const viewer::Mat4f& m) {
     const Color fill{body.r, body.g, body.b, 255};
@@ -263,9 +291,13 @@ void drawBody(const viewer::SceneBody& body, const viewer::Mat4f& m) {
             const Color cw{255, 200, 60, 255};
             if (body.kind == viewer::ShapeKind::Box)
                 DrawCubeWires(Vector3{0, 0, 0}, 2.0f * body.halfExtents.x, 2.0f * body.halfExtents.y, 2.0f * body.halfExtents.z, cw);
+            else if (body.kind == viewer::ShapeKind::Capsule || body.kind == viewer::ShapeKind::Cylinder)
+                drawAxisWire(body.kind, body.radius, body.halfHeight, cw);
             else
                 DrawSphereWires(Vector3{0, 0, 0}, body.radius, 12, 16, cw);
         }
+    } else if (body.kind == viewer::ShapeKind::Capsule || body.kind == viewer::ShapeKind::Cylinder) {   // V18
+        drawAxisSolid(body, fill, wire);
     } else if (body.kind == viewer::ShapeKind::Box) {
         const float w = 2.0f * body.halfExtents.x;
         const float h = 2.0f * body.halfExtents.y;
@@ -335,6 +367,8 @@ void drawHighlight(const viewer::SceneBody& body, const viewer::Mat4f& m) {
             DrawLine3D(Vector3{float(a.x) * 1.05f, float(a.y) * 1.05f, float(a.z) * 1.05f},
                        Vector3{float(b.x) * 1.05f, float(b.y) * 1.05f, float(b.z) * 1.05f}, c);
         }
+    } else if (body.kind == viewer::ShapeKind::Capsule || body.kind == viewer::ShapeKind::Cylinder) {   // V18
+        drawAxisWire(body.kind, body.radius, body.halfHeight, c, 1.06f);
     } else {
         DrawSphereWires(Vector3{0, 0, 0}, body.radius * 1.08f, 12, 12, c);
     }
@@ -402,6 +436,7 @@ int main(int argc, char** argv) {
     physics::DebugLineBuffer dbgBuf;
     viewer::WorldParams sceneDefaults = viewer::captureWorld(*scene.world);   // "Restaurar padroes da cena"
     int objTab = 0;
+    viewer::Vec3f camPan{};   // V19: deslocamento da câmera por WASD (soma ao alvo)
     // Painel "Adicionar objeto" (V8): aba principal (0 = Objeto, 1 = Adicionar) e o rascunho do que será criado.
     int mainTab = 0, addTab = 0, kindIdx = 0, qMode = 0, addFailFrames = 0;
     // Cenas salvas/carregadas (V12).
@@ -416,7 +451,7 @@ int main(int argc, char** argv) {
     const std::string modelDir = "models";
 #endif
     std::vector<std::string> sceneFiles = viewer::listSceneFiles(sceneDir);
-    // V15b: modelos 3D (aba Adicionar > Forma > "modelo 3D"). kindIdx == 6 é o modelo.
+    // V15b: modelos 3D (aba Adicionar > Forma > "modelo 3D"). kindIdx == 8 (kSpawnKindCount) é o modelo.
     std::vector<std::string> modelFiles = viewer::listModelFiles(modelDir);
     int modelScroll = 0, modelActive = -1, modelLoaded = -2;
     std::shared_ptr<const viewer::ObjModel> modelObj;
@@ -430,7 +465,8 @@ int main(int argc, char** argv) {
     std::string importMsg;
     bool importMsgErr = false;
     int importMsgFrames = 0;
-    int colliderIdx = 0;   // 0 = fecho convexo, 1 = caixa, 2 = esfera (viewer::ColliderKind)
+    int colliderIdx = 0;   // 0 = fecho, 1 = caixa, 2 = esfera, 3 = capsula, 4 = cilindro (viewer::ColliderKind)
+    float tuneR = 1.0f, tuneH = 1.0f;   // V18: ajuste fino do raio/altura do colisor capsula/cilindro
     int fileScroll = 0, fileActive = -1, fileMsgFrames = 0;
     bool fileMsgErr = false;
     std::string fileMsg, loadRequest;
@@ -465,6 +501,7 @@ int main(int argc, char** argv) {
     bool clickPlace = false;
     // V14 — editor de cena: estático/dimensões da caixa, seleção de estáticos, aba Juntas, cena nova.
     bool spStatic = false, pickStaticsOpt = false;
+    float spAxisR = 0.5f, spAxisH = 2.0f;   // V18: capsula/cilindro: raio = tamanho x spAxisR; altura total = tamanho x spAxisH
     float spBox[3] = {1.0f, 1.0f, 1.0f};   // escala por eixo da caixa (aresta = tamanho x escala)
     int jKind = 0, jBMode = 0, jAnchorMode = 0, jMsgFrames = 0, newSceneRequest = 0;   // jBMode: 0 = mundo, 1 = corpo B
     physics::BodyId jB = physics::kInvalidBodyId;
@@ -528,6 +565,7 @@ int main(int argc, char** argv) {
         timeCtl.onSceneReset();
         timeCtl.setPaused(startPaused);
         orbit.target = scene.cameraTarget;
+        camPan = viewer::Vec3f{};
         orbit.setDistance(scene.cameraDistance);
     };
 
@@ -575,7 +613,8 @@ int main(int argc, char** argv) {
         const viewer::RectF bodyL{dockL.x, dockL.y + kHdr, dockL.w, std::max(0.0f, dockL.h - kHdr)};
         const viewer::RectF bodyR{dockR.x, dockR.y + kHdr, dockR.w, std::max(0.0f, dockR.h - kHdr)};
         const float innerWL = std::max(240.0f, dockL.w - 2.0f * kPad - kBar), innerWR = std::max(240.0f, dockR.w - 2.0f * kPad - kBar);
-        const float objH = viewer::panel::objPanelHeight(mainTab, addTab, kindIdx == 0, kindIdx == viewer::kSpawnKindCount);   // V17: altura calculada do conteúdo
+        const float objH = viewer::panel::objPanelHeight(mainTab, addTab, kindIdx == 0, kindIdx == viewer::kSpawnKindCount,
+                                                                kindIdx == 6 || kindIdx == 7, kindIdx == viewer::kSpawnKindCount && colliderIdx >= 3);   // V17: altura calculada do conteúdo
         scrollL.setSizes(kPad + viewer::panel::kQuatH + kPad + (showWorld ? viewer::panel::kWorldH + kPad : 0.0f) + viewer::panel::kRecH + kPad, bodyL.h);
         scrollR.setSizes(kPad + viewer::panel::kInterpH + kPad + objH + kPad, bodyR.h);
         const float cxL = dockL.x + kPad, cyL = bodyL.y + kPad - scrollL.offset();
@@ -692,11 +731,13 @@ int main(int argc, char** argv) {
             timeCtl.setPaused(startPaused);   // trocar ou reiniciar a cena: volta pausada
             if (changed) {   // só ao trocar: R mantém a câmera que o usuário ajustou
                 orbit.target = scene.cameraTarget;
+                camPan = viewer::Vec3f{};
                 orbit.setDistance(scene.cameraDistance);
             }
         }
         if (keyPressed(KEY_HOME) || uiResetCam) {   // câmera: enquadramento inicial, alvo no centro do mundo
             orbit.reset(scene.cameraTarget, scene.cameraDistance);
+            camPan = viewer::Vec3f{};
             pivotSelected = false;
         }
         if (keyPressed(KEY_P) || keyPressed(KEY_SPACE) || uiTogglePause) timeCtl.togglePause();
@@ -742,7 +783,21 @@ int main(int argc, char** argv) {
         {
             viewer::Vec3f goal = scene.cameraTarget;
             if (pivotSelected && selected != physics::kInvalidBodyId) goal = viewer::toVec3f(renderPose(selected).position);
-            orbit.followTarget(goal, GetFrameTime());
+            // V19: WASD move a câmera pelo cenário (E sobe, Q desce, Shift acelera). O deslocamento acumulado
+            // `camPan` soma ao alvo, senão o seguimento suave o devolveria ao centro a cada quadro.
+            if (!fileNameEdit && !importEdit) {
+                const float f = (IsKeyDown(KEY_W) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) ? 1.0f : 0.0f);
+                const float r = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
+                const float u = (IsKeyDown(KEY_E) ? 1.0f : 0.0f) - (IsKeyDown(KEY_Q) ? 1.0f : 0.0f);
+                if (f != 0.0f || r != 0.0f || u != 0.0f) {
+                    const viewer::Vec3f d = orbit.moveDelta(f, r, u, GetFrameTime(), IsKeyDown(KEY_LEFT_SHIFT) ? 3.0f : 1.0f);
+                    camPan.x = std::max(-500.0f, std::min(500.0f, camPan.x + d.x));
+                    camPan.y = std::max(-500.0f, std::min(500.0f, camPan.y + d.y));
+                    camPan.z = std::max(-500.0f, std::min(500.0f, camPan.z + d.z));
+                }
+            }
+            goal = viewer::Vec3f{goal.x + camPan.x, goal.y + camPan.y, goal.z + camPan.z};
+            orbit.followTarget(goal, GetFrameTime(), (camPan.x != 0.0f || camPan.y != 0.0f || camPan.z != 0.0f) ? 25.0f : 10.0f);
         }
 
         Camera3D cam{};
@@ -775,12 +830,14 @@ int main(int argc, char** argv) {
             sp.angularVelocity = physics::Vector3(spAngV[0], spAngV[1], spAngV[2]);
             sp.isStatic = spStatic;
             sp.boxScale = physics::Vector3(spBox[0], spBox[1], spBox[2]);
+            sp.radiusScale = spAxisR;
+            sp.heightScale = spAxisH;
             if (kindIdx == viewer::kSpawnKindCount) {   // V15b: modelo importado (o fecho é recalculado para o tamanho escolhido)
                 viewer::ModelAsset asset;
                 std::string merr;
                 if (modelObj && viewer::makeModelAsset(modelObj, modelObjFile, viewer::modelBaseDir(modelDir, modelObjFile),
                                                        viewer::autoScale(*modelObj, sizeF), asset, merr,
-                                                       static_cast<viewer::ColliderKind>(colliderIdx))) {
+                                                       static_cast<viewer::ColliderKind>(colliderIdx), viewer::ColliderTuning{tuneR, tuneH})) {
                     sp.model = std::make_shared<viewer::ModelAsset>(asset);
                 } else {
                     modelInfo1 = modelObj ? "ERRO: " + merr : "escolha um modelo na lista";
@@ -904,7 +961,14 @@ int main(int argc, char** argv) {
         if (hasPlace) {   // prévia do "posicionar com clique": fio amarelo no ponto de criação
             const Vector3 c{static_cast<float>(placePt.x), static_cast<float>(placePt.y), static_cast<float>(placePt.z)};
             if (kindIdx == 1) DrawSphereWires(c, sizeF * 0.5f, 8, 12, YELLOW);
-            else DrawCubeWires(c, sizeF, sizeF, sizeF, YELLOW);
+            else if (kindIdx == 6 || kindIdx == 7) {   // V18
+                rlPushMatrix();
+                rlTranslatef(c.x, c.y, c.z);
+                const float pr = sizeF * spAxisR, ph = sizeF * spAxisH * 0.5f;
+                drawAxisWire(kindIdx == 6 ? viewer::ShapeKind::Capsule : viewer::ShapeKind::Cylinder, pr,
+                             kindIdx == 6 ? std::max(0.0f, ph - pr) : ph, YELLOW);
+                rlPopMatrix();
+            } else DrawCubeWires(c, sizeF, sizeF, sizeF, YELLOW);
         }
         if (drag.active()) {   // a mola: do ponto agarrado até onde o mouse aponta
             DrawLine3D(Vector3{float(drag.anchorWorld().x), float(drag.anchorWorld().y), float(drag.anchorWorld().z)},
@@ -984,7 +1048,7 @@ int main(int argc, char** argv) {
                                 static_cast<double>(timeCtl.renderAlpha(*scene.world)),
                                 viewer::TimeControl::scaleLabel(timeCtl.scaleIndex()), timeCtl.paused() ? "   [PAUSADO]" : ""),
                      hx, hb - 100, 16, Color{235, 238, 245, 255});
-            hudText("esq: selecionar/arrastar   dir/roda apertada: girar   roda: zoom", hx, hb - 78, 16, Color{200, 205, 215, 255});
+            hudText("esq: selecionar/arrastar  dir/roda: girar  roda: zoom  WASD+Q/E: mover (Shift: rapido)", hx, hb - 78, 16, Color{200, 205, 215, 255});
             hudText("B/O: lancar   Del/X: apagar   Espaco/P: pausa   . : passo", hx, hb - 58, 16, Color{200, 205, 215, 255});
             hudText("setas/1-9: cena   R: reiniciar   I: interpolacao   T: alvo", hx, hb - 38, 16, Color{200, 205, 215, 255});
             hudText("Home: camera   M: mundo   F5: apresentacao   F6: girar   F7: gravar   F11: tela cheia   ESC: sair", hx, hb - 18, 16, Color{200, 205, 215, 255});
@@ -1208,25 +1272,29 @@ int main(int argc, char** argv) {
                 GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Forma;Posicao;Orient;Veloc", &addTab);
                 oy += viewer::panel::kAddTabsStep;
                 if (addTab == 0) {   // forma, tamanho, massa, material
-                    const bool isModel = kindIdx == viewer::kSpawnKindCount;
-                    const int orig = kindIdx;
-                    int ka = (!isModel && orig < 3) ? orig : -1, kb = (!isModel && orig >= 3) ? orig - 3 : -1;
-                    GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "caixa;esfera;tetraedro", &ka);
-                    oy += viewer::panel::kKindRowStep;
-                    GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "octaedro;prisma;piramide", &kb);
-                    oy += viewer::panel::kKindRowStep;
-                    if (ka >= 0 && ka != ((!isModel && orig < 3) ? orig : -99)) kindIdx = ka;
-                    else if (kb >= 0 && kb != ((!isModel && orig >= 3) ? orig - 3 : -99)) kindIdx = kb + 3;
-                    modelToggle = kindIdx == viewer::kSpawnKindCount;
-                    GuiToggle(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "modelo 3D (.obj)", &modelToggle);
-                    if (modelToggle && kindIdx != viewer::kSpawnKindCount) kindIdx = viewer::kSpawnKindCount;
-                    else if (!modelToggle && kindIdx == viewer::kSpawnKindCount) kindIdx = 0;
-                    if (kindIdx == viewer::kSpawnKindCount && GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 26.0f}, "Atualizar lista")) {
-                        modelFiles = viewer::listModelFiles(modelDir);
-                        modelLoaded = -2;
-                        modelActive = -1;
+                    {   // V18: 3 linhas de 3 botões: 0-2, 3-5, 6-8 (8 = modelo 3D)
+                        static const char* const kRows[3] = {"caixa;esfera;tetraedro", "octaedro;prisma;piramide", "capsula;cilindro;modelo 3D"};
+                        const int orig = kindIdx;
+                        int pick = -1;
+                        for (int r = 0; r < viewer::panel::kKindRows; ++r) {
+                            int sel = orig / 3 == r ? orig % 3 : -1;
+                            const int was = sel;
+                            GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, kRows[r], &sel);
+                            if (sel >= 0 && sel != was) pick = r * 3 + sel;
+                            oy += viewer::panel::kKindRowStep;
+                        }
+                        if (pick >= 0) kindIdx = pick;
                     }
-                    oy += viewer::panel::kModelRowStep;
+                    const bool isModel = kindIdx == viewer::kSpawnKindCount;
+                    modelToggle = isModel;
+                    if (isModel) {
+                        if (GuiButton(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Atualizar lista")) {
+                            modelFiles = viewer::listModelFiles(modelDir);
+                            modelLoaded = -2;
+                            modelActive = -1;
+                        }
+                        oy += viewer::panel::kModelRowStep;
+                    }
                     if (kindIdx == viewer::kSpawnKindCount) {   // ---- V15b: escolher o modelo ----
                         std::string joined;
                         for (std::size_t i = 0; i < modelFiles.size(); ++i) {
@@ -1271,7 +1339,7 @@ int main(int argc, char** argv) {
                                 if (!viewer::loadObjFile(modelDir + "/" + file, *obj, lerr, &lwarn)) {
                                     modelInfo1 = "ERRO: " + lerr;
                                     modelInfoWarn = true;
-                                } else if (!viewer::makeImportedShape(*obj, viewer::autoScale(*obj, sizeF), static_cast<viewer::ColliderKind>(colliderIdx), is, lerr)) {
+                                } else if (!viewer::makeImportedShape(*obj, viewer::autoScale(*obj, sizeF), static_cast<viewer::ColliderKind>(colliderIdx), viewer::ColliderTuning{tuneR, tuneH}, is, lerr)) {
                                     modelInfo1 = "ERRO: " + lerr;
                                     modelInfoWarn = true;
                                 } else {
@@ -1283,8 +1351,12 @@ int main(int argc, char** argv) {
                                     else if (is.collider == viewer::ColliderKind::Box)
                                         modelInfo1 += TextFormat("caixa %.2f x %.2f x %.2f m", 2.0 * static_cast<double>(is.boxHalf.x), 2.0 * static_cast<double>(is.boxHalf.y),
                                                                  2.0 * static_cast<double>(is.boxHalf.z));
-                                    else
+                                    else if (is.collider == viewer::ColliderKind::Sphere)
                                         modelInfo1 += TextFormat("esfera raio %.2f m", static_cast<double>(is.sphereRadius));
+                                    else
+                                        modelInfo1 += TextFormat("%s raio %.2f, altura %.2f m", is.collider == viewer::ColliderKind::Capsule ? "capsula" : "cilindro",
+                                                                 static_cast<double>(is.axisRadius),
+                                                                 2.0 * static_cast<double>(is.axisHalfHeight) + (is.collider == viewer::ColliderKind::Capsule ? 2.0 * static_cast<double>(is.axisRadius) : 0.0));
                                     std::string tex = "sem textura (usa a cor)";
                                     for (const viewer::ObjMaterial& mat : obj->materials)
                                         if (!mat.diffuseMap.empty()) {
@@ -1298,6 +1370,8 @@ int main(int argc, char** argv) {
                                         modelInfo3 = is.concave ? "CONCAVO: colide como o fecho (preenche o buraco)" : "convexo: colisao exata";
                                     else
                                         modelInfo3 = is.fill > 0.0 ? std::string(TextFormat("colisor %.0f%% maior que o modelo", 100.0 * (1.0 / is.fill - 1.0))) : "colisor envolvente";
+                                    if ((is.collider == viewer::ColliderKind::Capsule || is.collider == viewer::ColliderKind::Cylinder) && is.longestAxis != 1)
+                                        modelInfo3 = "AVISO: o eixo mais longo nao e Y: gire o modelo no .obj";
                                     if (obj->triangles.size() > 60000) modelInfo3 = "modelo grande: pode ficar lento";
                                     if (!lwarn.empty()) modelInfo3 = lwarn;
                                 }
@@ -1314,13 +1388,21 @@ int main(int argc, char** argv) {
                         panelText("colisor (forma fisica do corpo):", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
                         {
                             const int before = colliderIdx;
-                            GuiToggleGroup(Rectangle{ox, oy + 16.0f, ow / 3.0f, 26.0f}, "Fecho;Caixa;Esfera", &colliderIdx);
+                            GuiToggleGroup(Rectangle{ox, oy + 16.0f, ow / 5.0f, 26.0f}, "Fecho;Caixa;Esfera;Capsula;Cilindro", &colliderIdx);
                             if (colliderIdx != before) modelLoaded = -2;   // refaz o resumo com o novo colisor
-                            static const char* const kWhy[3] = {"convexo fiel ao modelo (colisao mais exata)", "caixa envolvente: estavel, sobra folga nos cantos",
-                                                                 "esfera envolvente: rola, sobra bastante folga"};
-                            panelText(kWhy[colliderIdx >= 0 && colliderIdx < 3 ? colliderIdx : 0], static_cast<int>(ox), static_cast<int>(oy) + 44, 14, kInkDim);
+                            static const char* const kWhy[5] = {"convexo fiel ao modelo (colisao mais exata)", "caixa envolvente: estavel, sobra folga nos cantos",
+                                                                 "esfera envolvente: rola, sobra bastante folga",
+                                                                 "capsula (eixo Y): ideal p/ pessoa em pe, rola ao tombar",
+                                                                 "cilindro (eixo Y): colunas, latas; tem tampas planas"};
+                            panelText(kWhy[colliderIdx >= 0 && colliderIdx < 5 ? colliderIdx : 0], static_cast<int>(ox), static_cast<int>(oy) + 44, 14, kInkDim);
                         }
                         oy += viewer::panel::kColliderStep;
+                        if (colliderIdx >= 3) {   // V18: ajuste fino sobre o ajuste automatico
+                            const float r0 = tuneR, h0 = tuneH;
+                            sliderRow("raio do colisor", tuneR, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneR * 100.0f)));
+                            sliderRow("altura do colisor", tuneH, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneH * 100.0f)));
+                            if (tuneR != r0 || tuneH != h0) modelLoaded = -2;
+                        }
                     }
                     sliderRow(isModel ? "maior dimensao" : "tamanho", sizeF, 0.2f, 4.0f, TextFormat("%.2f m", static_cast<double>(sizeF)));
                     sliderRow("massa", massS, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(massS * massS)));
@@ -1331,6 +1413,10 @@ int main(int argc, char** argv) {
                         for (int i = 0; i < 3; ++i)
                             sliderRow(en[i], spBox[i], 0.1f, 10.0f,
                                       TextFormat("%.2f m", static_cast<double>(std::min(40.0f, std::max(0.05f, sizeF * spBox[i])))));
+                    }
+                    if (kindIdx == 6 || kindIdx == 7) {   // V18: capsula/cilindro
+                        sliderRow("raio", spAxisR, 0.1f, 2.0f, TextFormat("%.2f m", static_cast<double>(std::min(20.0f, std::max(0.02f, sizeF * spAxisR)))));
+                        sliderRow("altura", spAxisH, 0.2f, 6.0f, TextFormat("%.2f m", static_cast<double>(std::min(40.0f, std::max(0.04f, sizeF * spAxisH)))));
                     }
                     GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " estatico (nao se move)", &spStatic);
                     if (kindIdx == viewer::kSpawnKindCount) {

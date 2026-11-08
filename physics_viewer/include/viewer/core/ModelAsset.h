@@ -31,6 +31,8 @@ struct ModelAsset {
     int hullVertices = 0, hullFaces = 0, modelVertices = 0;
     bool concave = false;
     double fill = 0;                                ///< volume do modelo / volume do colisor
+    ColliderTuning tuning;                          ///< V18: ajuste de raio/altura usado (Capsule/Cylinder)
+    int longestAxis = 1;                            ///< V18: eixo mais longo do modelo (0 X, 1 Y, 2 Z)
 };
 
 /// Triângulos de um material, prontos para desenhar: posições já no referencial do corpo.
@@ -49,11 +51,13 @@ std::vector<std::string> listModelFiles(const std::string& dir);
 /// dimensão do modelo seja `targetSize` metros (autoScale). Falhas (arquivo, sintaxe, fecho, limites) dão
 /// false e `error`. `warning` recebe avisos (mtl ausente, textura recusada).
 bool loadModelAsset(const std::string& modelDir, const std::string& file, float targetSize, ModelAsset& out,
-                    std::string& error, std::string* warning = nullptr, ColliderKind collider = ColliderKind::Hull);
+                    std::string& error, std::string* warning = nullptr, ColliderKind collider = ColliderKind::Hull,
+                    const ColliderTuning& tuning = ColliderTuning());
 
 /// Novo asset a partir de um modelo já lido (várias cópias com tamanhos diferentes reaproveitam a malha).
 bool makeModelAsset(const std::shared_ptr<const ObjModel>& obj, const std::string& file, const std::string& baseDir,
-                    float scale, ModelAsset& out, std::string& error, ColliderKind collider = ColliderKind::Hull);
+                    float scale, ModelAsset& out, std::string& error, ColliderKind collider = ColliderKind::Hull,
+                    const ColliderTuning& tuning = ColliderTuning());
 
 /// Reconstrói o asset de um corpo carregado de arquivo: a forma e o alinhamento vêm do `.scene` (nada de recalcular).
 ModelAsset attachModel(const std::shared_ptr<const ObjModel>& obj, const std::string& file, const std::string& baseDir,

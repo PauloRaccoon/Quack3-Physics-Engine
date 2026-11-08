@@ -53,6 +53,23 @@ void OrbitCamera::followTarget(const Vec3f& goal, float dt, float rate) {
     target.z += (goal.z - target.z) * f;
 }
 
+Vec3f OrbitCamera::moveDelta(float forward, float right, float up, float dt, float boost) const {
+    if (!std::isfinite(forward) || !std::isfinite(right) || !std::isfinite(up) || !std::isfinite(dt) || !std::isfinite(boost) || !(dt > 0.0f))
+        return Vec3f{};
+    const auto clamp1 = [](float v) { return v < -1.0f ? -1.0f : (v > 1.0f ? 1.0f : v); };
+    forward = clamp1(forward);
+    right = clamp1(right);
+    up = clamp1(up);
+    if (dt > 0.1f) dt = 0.1f;                       // um quadro travado não "teletransporta" a câmera
+    if (boost < 0.0f) boost = 0.0f;
+    if (boost > 10.0f) boost = 10.0f;
+    const float speed = (kMoveBase + kMovePerMeter * (distance_ - kMinDistance)) * boost;
+    // Câmera em alvo + d·(cos p·sin y, sin p, cos p·cos y): olha para -(sin y, cos y) no chão; a direita da tela é (cos y, -sin y).
+    const float sy = std::sin(yaw_), cy = std::cos(yaw_);
+    const float k = speed * dt;
+    return Vec3f{k * (-sy * forward + cy * right), k * up, k * (-cy * forward - sy * right)};
+}
+
 Vec3f OrbitCamera::position() const {
     const float cp = std::cos(pitch_);
     return Vec3f{target.x + distance_ * cp * std::sin(yaw_),
