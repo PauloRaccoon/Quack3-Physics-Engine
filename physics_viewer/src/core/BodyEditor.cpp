@@ -98,6 +98,14 @@ bool setOrientationAxisAngle(PhysicsWorld& world, BodyId id, const Vector3& axis
     return true;
 }
 
+bool setOrientationQuaternion(PhysicsWorld& world, BodyId id, const Quaternion& q) {
+    if (!placeable(world, id) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w) || q.normSquared() < Real(1e-12)) return false;
+    Transform xf = world.getBody(id).getTransform();
+    xf.rotation = q.normalized();
+    world.setBodyTransform(id, xf);
+    return true;
+}
+
 bool resetOrientation(PhysicsWorld& world, BodyId id) {
     if (!placeable(world, id)) return false;
     Transform xf = world.getBody(id).getTransform();

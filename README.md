@@ -51,6 +51,12 @@ projeto/
 | V17 | corrige as sobreposições dos painéis (alturas calculadas e testadas, texto que se ajusta), importar o próprio `.obj` (arrastar e soltar na janela ou colar o caminho) e escolher o colisor do modelo (fecho, caixa ou esfera) | feita (janela não testada por mim; 1778 + 4176 verificações em float, double e ASan) |
 | V18 | **cápsula e cilindro** no motor (`CapsuleShape`, `CylinderShape`: suporte, inércia, AABB, contatos de 1 e 2 pontos para deitados, raycast, debug draw) e no viewer (criar, usar como colisor de modelos com ajuste automático e fino, `.scene` com `shape capsule`/`shape cylinder`) | feita (janela não testada por mim; motor: 14 suítes, 1010 verificações novas; viewer: 1890 + 4294 verificações em float, double e ASan) |
 | V19 | **correção do atrito**: atrito de torção (giro em torno da normal) e resistência à rolagem em esfera, cápsula e cilindro (antes uma bola girando em Y ou rolando nunca parava); **WASD** move a câmera pelo cenário (E/Q sobem e descem, Shift acelera) | feita (janela não testada por mim; motor: 15 suítes, 17 verificações novas; viewer: 1903 + 4294 em float, double e ASan) |
+| V20 | **ajustes de painel pedidos com prints**: aba Debug sem sobreposição (rótulos cortados dentro da coluna), caminho do CSV inteiro em várias linhas + botão *Copiar caminho*, sliders que usam a largura da coluna, e **clique duplo em qualquer slider** abre um campo de texto (Enter ou clique fora aplica, Esc cancela sem fechar o programa) | feita (janela não testada por mim; viewer: 1935 + 4294 verificações em float, double e ASan) |
+| V21 | **corrige a V20**: o rótulo das linhas de slider invadia a barra (texto por baixo dela) | feita (janela não testada por mim) |
+| V22 | **painel Cenas próprio** (no topo da coluna direita, fora do painel de objetos) e **lista única de cenas**: as originais e os `.scene` salvos aparecem juntos e as setas seguem essa ordem; dá para **reordenar, apagar e restaurar**, e isso fica salvo (`scenes/biblioteca.txt`) | feita (janela não testada por mim; viewer: 2060 + 4294 verificações em float, double e ASan) |
+| V23 | o programa agora se chama **Quack3** (versão `v0.<fase>`, título "Quack3 v0.23"); **tema cinza-grafite** no lugar do branco; botões/abas cujo texto sempre cabe (fonte reduz ao estreitar a coluna); **Interpolação volta ao topo** da coluna direita e os títulos das colunas listam os painéis na ordem certa | feita (janela não testada por mim; viewer: 2064 + 4294 verificações em float, double e ASan) |
+| V23.1 | correção de cores: botões, sliders e cabeçalhos trocados com o fundo dos painéis; título "Quack3 v0.23.1" | feita (janela não testada por mim) |
+| V24 | **integração da orientação por exponencial de quatérnio** (`q ← exp(½Δt ω) q`, exata para ω constante; Euler continua como opção em `IntegratorSettings::orientation` e numa caixa no painel do mundo), **esfera de arcball** (arrastar gira o corpo selecionado), slider que **mantém o valor antigo editável** e aceita **contas** (`4/2`, `1-4`, `2*(3+1)`) | feita (janela não testada por mim; motor 15 suítes float/double/ASan; viewer 2127 + 4294) |
 
 **Ainda não existe** (ver seção 8): colisão contínua (CCD), forma composta,
 limites e motores de junta, malha estática, API C para outras linguagens.
@@ -365,6 +371,7 @@ de ilhas e a equivalência com/sem *sleeping*) e `events_tests`.
 
 Limitações atuais:
 
+- **Orientação (V24):** por padrão avança por exponencial de quatérnio (exata para ω constante dentro do passo); a dinâmica continua de primeira ordem (giroscópico por um passo de Newton, juntas, contatos).
 - **Sem CCD.** Corpos rápidos e pequenos podem atravessar paredes finas.
 - **Torres altas balançam.** Uma torre de 10 caixas alinhadas oscila devagar com 10 iterações do solver
   (`float`, 20 s: topo a até ~12 cm do eixo, velocidade tardia ~0,12 m/s; a correção de posição não

@@ -103,6 +103,10 @@
 #include "viewer/core/TrajectoryRecorder.h"
 #include "viewer/core/ModelImporter.h"
 #include "viewer/core/PanelMetrics.h"
+#include "viewer/core/AppInfo.h"
+#include "viewer/core/Arcball.h"
+#include "viewer/core/SceneLibrary.h"
+#include "viewer/core/SliderText.h"
 #include "viewer/core/WorldEditor.h"
 #include "viewer/core/Scene.h"
 #include "viewer/core/SceneFile.h"
@@ -117,11 +121,42 @@ Vector3 toRay(const viewer::Vec3f& v) { return Vector3{v.x, v.y, v.z}; }
 
 // Cores de texto. Os painéis do raygui são CLAROS (cinza), então o texto dentro deles é ESCURO. O texto que fica
 // direto sobre a cena 3D (HUD) é claro e ganha uma faixa escura translúcida (hudText), senão some no chão cinza.
-constexpr Color kInk{30, 32, 40, 255};       // texto principal nos painéis
-constexpr Color kInkDim{70, 74, 86, 255};    // texto secundário nos painéis
-constexpr Color kAccent{150, 70, 0, 255};    // valores do quatérnio
-constexpr Color kWarn{190, 25, 25, 255};     // avisos (|q| != 1, gimbal lock)
-constexpr Color kBlueInk{20, 80, 170, 255};
+// V23: tema cinza-grafite (antes os painéis eram brancos). Texto claro sobre superfícies cinza escuras.
+constexpr Color kInk{226, 229, 236, 255};      // texto principal nos painéis
+constexpr Color kInkDim{150, 157, 172, 255};   // texto secundário nos painéis
+constexpr Color kAccent{255, 176, 80, 255};    // valores do quatérnio
+constexpr Color kWarn{255, 112, 112, 255};     // avisos (|q| != 1, gimbal lock)
+constexpr Color kBlueInk{130, 185, 255, 255};
+constexpr Color kDockBg{32, 34, 41, 255};      // fundo das colunas laterais
+constexpr Color kSurface{68, 73, 86, 255};     // fundo dos painéis (v0.23.1: trocado com o dos controles)
+
+/// V23: estilo do raygui (todos os controles) — cinza-grafite com destaque azul. Chamado uma vez após InitWindow.
+void applyTheme() {
+    const auto set = [](int prop, Color c) { GuiSetStyle(DEFAULT, prop, ColorToInt(c)); };
+    set(BACKGROUND_COLOR, kSurface);
+    set(LINE_COLOR, Color{78, 83, 97, 255});
+    set(BASE_COLOR_NORMAL, Color{47, 50, 59, 255});   // v0.23.1: botões, sliders e cabeçalhos (eram o tom claro; fundo e controles trocaram)
+    set(BORDER_COLOR_NORMAL, Color{96, 102, 118, 255});
+    set(TEXT_COLOR_NORMAL, kInk);
+    set(BASE_COLOR_FOCUSED, Color{60, 65, 78, 255});
+    set(BORDER_COLOR_FOCUSED, Color{130, 170, 255, 255});
+    set(TEXT_COLOR_FOCUSED, Color{245, 247, 250, 255});
+    set(BASE_COLOR_PRESSED, Color{54, 118, 228, 255});   // destaque: aba/botão ativo, miolo do slider
+    set(BORDER_COLOR_PRESSED, Color{150, 190, 255, 255});
+    set(TEXT_COLOR_PRESSED, Color{255, 255, 255, 255});
+    set(BASE_COLOR_DISABLED, Color{52, 56, 66, 255});
+    set(BORDER_COLOR_DISABLED, Color{70, 75, 88, 255});
+    set(TEXT_COLOR_DISABLED, Color{122, 128, 142, 255});
+    // Campo de texto em edição: fundo escuro com borda azul (senão ficaria todo azul).
+    GuiSetStyle(TEXTBOX, BASE_COLOR_PRESSED, ColorToInt(Color{26, 28, 34, 255}));
+    GuiSetStyle(TEXTBOX, BORDER_COLOR_PRESSED, ColorToInt(Color{130, 170, 255, 255}));
+    GuiSetStyle(TEXTBOX, TEXT_COLOR_PRESSED, ColorToInt(Color{240, 242, 246, 255}));
+    GuiSetStyle(TEXTBOX, BASE_COLOR_NORMAL, ColorToInt(Color{36, 39, 47, 255}));
+    GuiSetStyle(LISTVIEW, BASE_COLOR_FOCUSED, ColorToInt(Color{62, 67, 80, 255}));
+    GuiSetStyle(LISTVIEW, BORDER_COLOR_FOCUSED, ColorToInt(Color{62, 67, 80, 255}));
+    GuiSetStyle(LISTVIEW, BASE_COLOR_PRESSED, ColorToInt(Color{54, 118, 228, 255}));
+    GuiSetStyle(LISTVIEW, BORDER_COLOR_PRESSED, ColorToInt(Color{54, 118, 228, 255}));
+}
 
 /// V17: borda direita (px) onde o texto dos painéis das colunas deve terminar; cada coluna ajusta ao abrir.
 float gTextRight = 100000.0f;
@@ -143,6 +178,62 @@ void panelText(const char* text, int x, int y, int size, Color color) {
     DrawText(t.c_str(), x, y + (size - sz) / 2, sz, color);
 }
 
+/// V23: botão cujo texto sempre cabe: se não couber com a fonte atual, usa uma fonte menor só neste botão (mín. 10 px).
+int fitButton(Rectangle r, const char* text) {
+    const int base = GuiGetStyle(DEFAULT, TEXT_SIZE);
+    const Font font = GuiGetFont();
+    const float spacing = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SPACING));
+    int sz = base;
+    while (sz > 10 && MeasureTextEx(font, text, static_cast<float>(sz), spacing).x > r.width - 12.0f) --sz;
+    if (sz != base) GuiSetStyle(DEFAULT, TEXT_SIZE, sz);
+    const int res = GuiButton(r, text);
+    if (sz != base) GuiSetStyle(DEFAULT, TEXT_SIZE, base);
+    return res;
+}
+
+/// V23: grupo de abas (rótulos separados por ';') com a fonte reduzida até o MAIOR rótulo caber em um botão.
+int fitToggleGroup(Rectangle r, const char* labels, int* active) {
+    const int base = GuiGetStyle(DEFAULT, TEXT_SIZE);
+    const Font font = GuiGetFont();
+    const float spacing = static_cast<float>(GuiGetStyle(DEFAULT, TEXT_SPACING));
+    int sz = base;
+    const std::string all = labels;
+    std::size_t pos = 0;
+    while (sz > 10) {
+        bool fits = true;
+        pos = 0;
+        while (pos <= all.size()) {
+            std::size_t e = all.find(';', pos);
+            if (e == std::string::npos) e = all.size();
+            if (MeasureTextEx(font, all.substr(pos, e - pos).c_str(), static_cast<float>(sz), spacing).x > r.width - 10.0f) { fits = false; break; }
+            pos = e + 1;
+        }
+        if (fits) break;
+        --sz;
+    }
+    if (sz != base) GuiSetStyle(DEFAULT, TEXT_SIZE, sz);
+    const int res = GuiToggleGroup(r, labels, active);
+    if (sz != base) GuiSetStyle(DEFAULT, TEXT_SIZE, base);
+    return res;
+}
+
+/// V21: rótulo de linha de slider: nunca passa de `right` (onde começa a barra), senão o texto ficava por baixo dela.
+void labelText(const char* text, float x, float y, float right) {
+    const float saved = gTextRight;
+    gTextRight = std::min(gTextRight, right);
+    panelText(text, static_cast<int>(x), static_cast<int>(y), 16, kInk);
+    gTextRight = saved;
+}
+
+/// V20: texto de painel quebrado em linhas (até `maxLines`; a última leva ".." se ainda sobrar). Prefere quebrar depois
+/// de '/', '\\', '_' ou espaço, para caminhos de arquivo ficarem legíveis. Devolve a altura usada (px).
+float wrapPanelText(const std::string& text, int x, int y, int size, Color color, int maxLines) {
+    const int maxW = static_cast<int>(gTextRight) - x;
+    const std::vector<std::string> lines = viewer::wrapText(text, maxW, maxLines, [&](const std::string& t) { return MeasureText(t.c_str(), size); });
+    for (std::size_t i = 0; i < lines.size(); ++i) DrawText(lines[i].c_str(), x, y + static_cast<int>(i) * (size + 2), size, color);
+    return static_cast<float>(lines.size() * static_cast<std::size_t>(size + 2));
+}
+
 /// Texto sobre a cena: faixa escura translúcida atrás (mesma assinatura de DrawText).
 void hudText(const char* text, int x, int y, int size, Color color) {
     const int w = MeasureText(text, size);
@@ -150,12 +241,82 @@ void hudText(const char* text, int x, int y, int size, Color color) {
     DrawText(text, x, y, size, color);
 }
 
+/// V20: edição de um slider por clique duplo. Só existe UM campo de texto ativo por vez; ele é identificado
+/// pelo retângulo da barra (se o layout mudar — troca de aba, rolagem —, a edição é cancelada).
+struct SliderEditState {
+    bool active = false;
+    bool seen = false;          ///< o slider em edição foi desenhado neste quadro?
+    Rectangle rect{0, 0, 0, 0};
+    char buf[64] = {0};
+    // detecção do clique duplo
+    Rectangle lastRect{0, 0, 0, 0};
+    double lastTime = -10.0;
+    float pressValue = 0.0f;    ///< valor ANTES do primeiro clique (o primeiro clique move a barra; o duplo o desfaz)
+};
+SliderEditState gSE;
+
+bool sameRect(const Rectangle& a, const Rectangle& b) {
+    return std::fabs(a.x - b.x) < 0.5f && std::fabs(a.y - b.y) < 0.5f && std::fabs(a.width - b.width) < 0.5f;
+}
+
+/// Início de cada quadro: edição cujo slider não foi mais desenhado (aba trocada, painel rolado) é cancelada.
+void sliderEditBeginFrame() {
+    if (gSE.active && !gSE.seen) gSE.active = false;
+    gSE.seen = false;
+}
+
 /// Slider com a regra do painel: só conta como edição do usuário se o valor mudou COM o botão apertado
 /// e o mouse sobre a barra (o raygui limita valores fora da faixa, e isso não pode alterar o mundo).
-bool sliderEdited(const Rectangle& bar, float& v, float lo, float hi) {
+/// V20: clique duplo rápido abre um campo de texto no lugar da barra: Enter ou clique fora aplica (limitado a [lo, hi]),
+/// Esc cancela. V24: o campo já vem com o valor atual (editável) e aceita contas ("4/2", "1-4", "2*(3+1)"). Devolve true quando o usuário mudou o valor (arrastando ou digitando).
+bool sliderBox(const Rectangle& bar, float& v, float lo, float hi, viewer::SliderUnit unit = viewer::SliderUnit{}) {
     const float before = v;
+    const Vector2 mp = GetMousePosition();
+    if (gSE.active && sameRect(gSE.rect, bar)) {   // --- este slider está sendo editado: campo de texto
+        gSE.seen = true;
+        if (GuiTextBox(bar, gSE.buf, static_cast<int>(sizeof(gSE.buf)) - 1, true)) {   // Enter ou clique fora
+            gSE.active = false;
+            float nv = 0.0f;
+            if (!viewer::sliderValueFromText(gSE.buf, unit, lo, hi, nv)) return false;   // texto inválido: mantém o valor
+            v = nv;
+            return v != before;
+        }
+        return false;
+    }
+    const bool hover = !GuiIsLocked() && CheckCollisionPointRec(mp, bar);
+    if (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        const double now = GetTime();
+        if (now - gSE.lastTime < 0.4 && sameRect(gSE.lastRect, bar)) {   // clique duplo: edição por texto
+            v = gSE.pressValue;   // desfaz o que o primeiro clique fez na barra
+            std::snprintf(gSE.buf, sizeof(gSE.buf), "%s", viewer::sliderTextFromValue(v, unit).c_str());
+            gSE.active = true;
+            textBoxCursorIndex = static_cast<int>(std::strlen(gSE.buf));   // V24: o valor atual continua no campo; cursor no fim
+            gSE.seen = true;
+            gSE.rect = bar;
+            gSE.lastTime = -10.0;
+            GuiTextBox(bar, gSE.buf, static_cast<int>(sizeof(gSE.buf)) - 1, true);   // desenha já neste quadro
+            return v != before;
+        }
+        gSE.lastRect = bar;
+        gSE.lastTime = now;
+        gSE.pressValue = v;
+    }
     GuiSlider(bar, nullptr, nullptr, &v, lo, hi);
-    return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), bar);
+    return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && hover;
+}
+
+/// V20: caixa de seleção cujo rótulo NUNCA passa da coluna (encolhe a fonte ou corta, como panelText) e que também
+/// alterna ao clicar no rótulo. `right` = borda direita do texto (por padrão a da coluna).
+void checkLabel(float x, float y, const char* label, bool* on, float right = -1.0f) {
+    GuiCheckBox(Rectangle{x, y, 20.0f, 20.0f}, "", on);
+    while (*label == ' ') ++label;
+    const float savedRight = gTextRight;
+    if (right > 0.0f) gTextRight = std::min(gTextRight, right);
+    panelText(label, static_cast<int>(x) + 26, static_cast<int>(y) + 2, 16, kInk);
+    const float labelRight = std::max(x + 30.0f, gTextRight);
+    gTextRight = savedRight;
+    const Rectangle hit{x + 22.0f, y, labelRight - (x + 22.0f), 20.0f};
+    if (!GuiIsLocked() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(GetMousePosition(), hit)) *on = !*on;
 }
 
 // V15b — modelos 3D importados: texturas e grupos de malha em cache (a janela é a única parte que toca a GPU).
@@ -398,20 +559,53 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(kScreenW, kScreenH, "physics_viewer — V13");
+    InitWindow(kScreenW, kScreenH, viewer::appinfo::windowTitle().c_str());   // V23: "Quack3 v0.23"
     SetWindowMinSize(1100, 700);   // duas colunas de 340 + cena de 320 + bordas; abaixo disso as colunas encolhem
     int fpsApplied = 120;
     float fpsSlider = 120.0f;
     SetTargetFPS(fpsApplied);   // o render NÃO precisa casar com a taxa da física: há interpolação
     GuiSetStyle(DEFAULT, TEXT_SIZE, 16);
+    applyTheme();   // V23
     viewer::InterpMode mode = viewer::InterpMode::Slerp;
 
     viewer::OrbitCamera orbit;
-    const std::size_t sceneCount = viewer::sceneList().size();
+#ifdef VIEWER_SCENES_DIR
+    const std::string sceneDir = VIEWER_SCENES_DIR;
+#else
+    const std::string sceneDir = "scenes";
+#endif
+#ifdef VIEWER_MODELS_DIR
+    const std::string modelDir = VIEWER_MODELS_DIR;
+#else
+    const std::string modelDir = "models";
+#endif
+    // V22: lista única de cenas = originais + arquivos .scene salvos; ordem e remoções ficam em scenes/biblioteca.txt.
+    // (sceneDir/modelDir são declarados acima, antes do bloco da janela.)
+    viewer::SceneLibrary lib;
+    const std::string libPath = sceneDir + "/" + viewer::scenelibrary::kFileName;
+    {
+        std::string saved;
+        std::ifstream f(libPath);
+        if (f) {
+            std::stringstream ss;
+            ss << f.rdbuf();
+            saved = ss.str();
+        }
+        lib.rebuild(viewer::listSceneFiles(sceneDir), saved);
+    }
+    bool libDirty = false;
     std::size_t sceneIndex = 0;
+    std::string startupMsg;
     viewer::ContactTracker tracker;   // V9: efeitos dos eventos de contato (vive mais que os mundos)
     bool tintOn = true, flashOn = true, ringsOn = true;
-    viewer::Scene scene = viewer::makeScene(sceneIndex);
+    viewer::Scene scene;
+    for (std::size_t i = 0; i < lib.size(); ++i) {   // 1ª cena que carrega (um arquivo ruim é marcado e pulado)
+        std::string err;
+        if (viewer::buildLibraryScene(lib.at(i), sceneDir, modelDir, scene, err)) { sceneIndex = i; break; }
+        lib.at(i).broken = true;
+        startupMsg = "ERRO ao carregar " + lib.at(i).name + ": " + err;
+        if (i + 1 == lib.size()) scene = viewer::makeScene(0);
+    }
     scene.world->setContactListener(&tracker);
     orbit.target = scene.cameraTarget;
     orbit.setDistance(scene.cameraDistance);
@@ -440,16 +634,6 @@ int main(int argc, char** argv) {
     // Painel "Adicionar objeto" (V8): aba principal (0 = Objeto, 1 = Adicionar) e o rascunho do que será criado.
     int mainTab = 0, addTab = 0, kindIdx = 0, qMode = 0, addFailFrames = 0;
     // Cenas salvas/carregadas (V12).
-#ifdef VIEWER_SCENES_DIR
-    const std::string sceneDir = VIEWER_SCENES_DIR;
-#else
-    const std::string sceneDir = "scenes";
-#endif
-#ifdef VIEWER_MODELS_DIR
-    const std::string modelDir = VIEWER_MODELS_DIR;
-#else
-    const std::string modelDir = "models";
-#endif
     std::vector<std::string> sceneFiles = viewer::listSceneFiles(sceneDir);
     // V15b: modelos 3D (aba Adicionar > Forma > "modelo 3D"). kindIdx == 8 (kSpawnKindCount) é o modelo.
     std::vector<std::string> modelFiles = viewer::listModelFiles(modelDir);
@@ -467,9 +651,13 @@ int main(int argc, char** argv) {
     int importMsgFrames = 0;
     int colliderIdx = 0;   // 0 = fecho, 1 = caixa, 2 = esfera, 3 = capsula, 4 = cilindro (viewer::ColliderKind)
     float tuneR = 1.0f, tuneH = 1.0f;   // V18: ajuste fino do raio/altura do colisor capsula/cilindro
-    int fileScroll = 0, fileActive = -1, fileMsgFrames = 0;
+    int fileMsgFrames = 0;
+    int libActive = -1, libScroll = 0, gotoScene = -1;   // V22: seleção na lista do painel Cenas, rolagem e pedido de troca
+    bool delConfirm = false;                              // V22: "Apagar" pede um segundo clique
+    viewer::RectF sceneListRect;                          // V22: a roda rola a lista de cenas, não a coluna
     bool fileMsgErr = false;
-    std::string fileMsg, loadRequest;
+    std::string fileMsg;
+    if (!startupMsg.empty()) { fileMsg = startupMsg; fileMsgErr = true; fileMsgFrames = 900; }
     // V13: layout em colunas, rolagem e o viewport 3D (textura do tamanho exato da área central).
     viewer::DockLayout dock;
     viewer::ScrollState scrollL, scrollR;
@@ -483,6 +671,7 @@ int main(int argc, char** argv) {
     viewer::TrajectoryRecorder recorder;
     int recTarget = 0;                       // 0 = corpo selecionado, 1 = todos os dinâmicos
     std::string recMsg;
+    std::string recLastPath;   // V20: caminho completo do último CSV salvo (fica na tela até o próximo)
     int recMsgFrames = 0;
     int recFileCounter = 0;
     bool uiRecToggle = false, uiRecSave = false;
@@ -572,10 +761,12 @@ int main(int argc, char** argv) {
     // V12: com o campo de nome em edição os atalhos de teclado ficam desligados (senão "r", "t", espaço... agiriam).
     SetExitKey(KEY_NULL);   // ESC não fecha a janela sozinho: fecha só fora da edição (ver abaixo)
     bool quitRequested = false;
-    auto keyPressed = [&](int k) { return !fileNameEdit && !importEdit && IsKeyPressed(k); };
+    auto keyPressed = [&](int k) { return !fileNameEdit && !importEdit && !gSE.active && IsKeyPressed(k); };
     while (!WindowShouldClose() && !quitRequested) {
+        sliderEditBeginFrame();   // V20
         if (IsKeyPressed(KEY_ESCAPE)) {
-            if (fileNameEdit || importEdit) fileNameEdit = importEdit = false;   // ESC sai da edição do texto
+            if (gSE.active) gSE.active = false;   // V20: Esc cancela a edição do slider (não fecha o programa nem aplica)
+            else if (fileNameEdit || importEdit) fileNameEdit = importEdit = false;   // ESC sai da edição do texto
             else if (presentation) presentation = false;   // V16: ESC sai da apresentação antes de fechar o programa
             else quitRequested = true;
         }
@@ -615,16 +806,19 @@ int main(int argc, char** argv) {
         const float innerWL = std::max(240.0f, dockL.w - 2.0f * kPad - kBar), innerWR = std::max(240.0f, dockR.w - 2.0f * kPad - kBar);
         const float objH = viewer::panel::objPanelHeight(mainTab, addTab, kindIdx == 0, kindIdx == viewer::kSpawnKindCount,
                                                                 kindIdx == 6 || kindIdx == 7, kindIdx == viewer::kSpawnKindCount && colliderIdx >= 3);   // V17: altura calculada do conteúdo
-        scrollL.setSizes(kPad + viewer::panel::kQuatH + kPad + (showWorld ? viewer::panel::kWorldH + kPad : 0.0f) + viewer::panel::kRecH + kPad, bodyL.h);
-        scrollR.setSizes(kPad + viewer::panel::kInterpH + kPad + objH + kPad, bodyR.h);
+        scrollL.setSizes(kPad + viewer::panel::kQuatH + kPad + viewer::panel::kArcballH + kPad + (showWorld ? viewer::panel::kWorldH + kPad : 0.0f) + viewer::panel::kRecH + kPad, bodyL.h);
+        scrollR.setSizes(kPad + viewer::panel::kScenesH + kPad + viewer::panel::kInterpH + kPad + objH + kPad, bodyR.h);
         const float cxL = dockL.x + kPad, cyL = bodyL.y + kPad - scrollL.offset();
         const float cxR = dockR.x + kPad, cyR = bodyR.y + kPad - scrollR.offset();
         const Rectangle controlBar{16.0f, 8.0f, screenW - 32.0f, 36.0f};
         const Rectangle quatPanel{cxL, cyL, innerWL, viewer::panel::kQuatH};
-        const Rectangle worldPanel{cxL, cyL + viewer::panel::kQuatH + kPad, innerWL, viewer::panel::kWorldH};
-        const Rectangle recPanel{cxL, cyL + viewer::panel::kQuatH + kPad + (showWorld ? viewer::panel::kWorldH + kPad : 0.0f), innerWL, viewer::panel::kRecH};
+        const Rectangle arcPanel{cxL, cyL + viewer::panel::kQuatH + kPad, innerWL, viewer::panel::kArcballH};
+        const Rectangle worldPanel{cxL, arcPanel.y + viewer::panel::kArcballH + kPad, innerWL, viewer::panel::kWorldH};
+        const Rectangle recPanel{cxL, arcPanel.y + viewer::panel::kArcballH + kPad + (showWorld ? viewer::panel::kWorldH + kPad : 0.0f), innerWL, viewer::panel::kRecH};
+        // V23: coluna direita = Interpolação (topo), Cenas, Objetos (V22 tinha posto Cenas no topo).
         const Rectangle interpPanel{cxR, cyR, innerWR, viewer::panel::kInterpH};
-        const Rectangle objPanel{cxR, cyR + viewer::panel::kInterpH + kPad, innerWR, objH};
+        const Rectangle scenesPanel{cxR, cyR + viewer::panel::kInterpH + kPad, innerWR, viewer::panel::kScenesH};
+        const Rectangle objPanel{cxR, cyR + viewer::panel::kScenesH + kPad + viewer::panel::kInterpH + kPad, innerWR, objH};
         // Só a cena 3D recebe cliques de cena: sobre colunas, borda, barra de rolagem ou barra de controle não.
         const bool overGui = !vp.contains(mouse.x, mouse.y) || dock.dragging() || scrollDrag >= 0;
 
@@ -658,7 +852,7 @@ int main(int argc, char** argv) {
                 } else if (scrollDrag == side) {
                     scrollDrag = -1;
                 }
-                if (wheel != 0.0f && body.contains(mouse.x, mouse.y) && !fileListRect.contains(mouse.x, mouse.y) && !drag.active()) sc.wheel(wheel);
+                if (wheel != 0.0f && body.contains(mouse.x, mouse.y) && !fileListRect.contains(mouse.x, mouse.y) && !sceneListRect.contains(mouse.x, mouse.y) && !drag.active()) sc.wheel(wheel);
             };
             scrollInput(0, scrollL, bodyL, !dock.collapsed(viewer::DockSide::Left) && bodyL.w > 120.0f);
             scrollInput(1, scrollR, bodyR, !dock.collapsed(viewer::DockSide::Right) && bodyR.w > 120.0f);
@@ -674,28 +868,20 @@ int main(int argc, char** argv) {
         if (keyPressed(KEY_F7)) uiRecToggle = true;
         if (keyPressed(KEY_F11)) ToggleBorderlessWindowed();   // tela cheia sem borda (e volta)
 
-        // Troca de cena: ←/→ (com volta) ou 1–9; R recria a atual (reinicia).
+        // Troca de cena: ←/→ (com volta) ou 1–9 percorrem a biblioteca (V22: originais + salvas, na ordem dela);
+        // R recria a atual (reinicia); o painel Cenas pede um índice em gotoScene.
+        const std::size_t sceneCount = lib.size();
         std::size_t wanted = sceneIndex;
-        if (keyPressed(KEY_RIGHT) || uiSceneDelta > 0) wanted = (sceneIndex + 1) % sceneCount;
-        if (keyPressed(KEY_LEFT) || uiSceneDelta < 0) wanted = (sceneIndex + sceneCount - 1) % sceneCount;
-        for (int k = 0; k < 9; ++k)
-            if (keyPressed(KEY_ONE + k) && static_cast<std::size_t>(k) < sceneCount) wanted = static_cast<std::size_t>(k);
-        if (!loadRequest.empty()) {   // aba Cenas: carregar um arquivo
-            viewer::Scene loaded;
-            std::string err;
-            const std::string path = sceneDir + "/" + loadRequest + viewer::scenefile::kExtension;
-            std::string loadWarn;
-            if (viewer::loadSceneFile(path, loaded, err, modelDir, &loadWarn)) {
-                adoptScene(std::move(loaded));
-                fileMsg = "carregado: " + loadRequest + " (pausada)" + (loadWarn.empty() ? "" : " AVISO: " + loadWarn);
-                fileMsgErr = false;
-            } else {
-                fileMsg = "ERRO: " + err;
-                fileMsgErr = true;
-            }
-            fileMsgFrames = 600;
-            loadRequest.clear();
+        int stepDir = 1;
+        if (sceneCount > 0) {
+            if (keyPressed(KEY_RIGHT) || uiSceneDelta > 0) { wanted = (sceneIndex + 1) % sceneCount; stepDir = 1; }
+            if (keyPressed(KEY_LEFT) || uiSceneDelta < 0) { wanted = (sceneIndex + sceneCount - 1) % sceneCount; stepDir = -1; }
+            for (int k = 0; k < 9; ++k)
+                if (keyPressed(KEY_ONE + k) && static_cast<std::size_t>(k) < sceneCount) wanted = static_cast<std::size_t>(k);
         }
+        const bool forceLib = gotoScene >= 0 && static_cast<std::size_t>(gotoScene) < sceneCount;   // escolha explícita no painel
+        if (forceLib) wanted = static_cast<std::size_t>(gotoScene);
+        gotoScene = -1;
         if (newSceneRequest != 0) {   // aba Cenas: cena nova (V14)
             adoptScene(viewer::makeEmptyScene(newSceneRequest == 2));
             fileMsg = newSceneRequest == 2 ? "cena nova: so o chao (pausada)" : "cena nova: vazia (pausada)";
@@ -704,17 +890,37 @@ int main(int argc, char** argv) {
             newSceneRequest = 0;
         }
         const bool changed = wanted != sceneIndex;
-        if (changed || keyPressed(KEY_R) || uiRestart) {
-            sceneIndex = wanted;
-            bool fromFile = false;
-            if (!changed && customActive) {   // R / Reiniciar numa cena carregada: recria a partir do arquivo
+        if (sceneCount > 0 && (changed || forceLib || keyPressed(KEY_R) || uiRestart)) {
+            viewer::Scene next;
+            std::size_t target = wanted;
+            bool built = false;
+            const bool useCustom = !changed && !forceLib && customActive;   // R numa cena nova/adotada: recria do texto
+            if (useCustom) {
                 std::string err;
-                fromFile = viewer::parseScene(customText, scene, err, modelDir);
+                built = viewer::parseScene(customText, next, err, modelDir);
             }
-            if (!fromFile) {
-                customActive = false;
-                scene = viewer::makeScene(sceneIndex);
+            const bool fromCustom = built;
+            for (std::size_t attempt = 0; !built && attempt < sceneCount; ++attempt) {
+                std::string err, warn;
+                if (viewer::buildLibraryScene(lib.at(target), sceneDir, modelDir, next, err, &warn)) {
+                    built = true;
+                    lib.at(target).broken = false;
+                    if (!warn.empty()) { fileMsg = "AVISO: " + warn; fileMsgErr = true; fileMsgFrames = 600; }
+                } else {
+                    lib.at(target).broken = true;
+                    fileMsg = "ERRO ao carregar " + lib.at(target).name + ": " + err;
+                    fileMsgErr = true;
+                    fileMsgFrames = 900;
+                    if (!changed || forceLib) break;   // reinício ou escolha explícita: não pula para outra
+                    target = stepDir > 0 ? (target + 1) % sceneCount : (target + sceneCount - 1) % sceneCount;   // seta: pula a cena ruim
+                }
             }
+            if (built) {
+                scene = std::move(next);
+                if (!fromCustom) {
+                    sceneIndex = target;
+                    customActive = false;
+                }
             tracker.reset();
             scene.world->setContactListener(&tracker);
             sceneDefaults = viewer::captureWorld(*scene.world);
@@ -729,11 +935,12 @@ int main(int argc, char** argv) {
             drag.end();
             timeCtl.onSceneReset();
             timeCtl.setPaused(startPaused);   // trocar ou reiniciar a cena: volta pausada
-            if (changed) {   // só ao trocar: R mantém a câmera que o usuário ajustou
+            if (!fromCustom && (changed || forceLib)) {   // só ao trocar: R mantém a câmera que o usuário ajustou
                 orbit.target = scene.cameraTarget;
                 camPan = viewer::Vec3f{};
                 orbit.setDistance(scene.cameraDistance);
             }
+            }   // if (built)
         }
         if (keyPressed(KEY_HOME) || uiResetCam) {   // câmera: enquadramento inicial, alvo no centro do mundo
             orbit.reset(scene.cameraTarget, scene.cameraDistance);
@@ -764,7 +971,7 @@ int main(int argc, char** argv) {
             if (base.empty()) base = "cena";
             const std::string path = exportDir + "/trajetoria_" + base + "_" + std::to_string(++recFileCounter) + ".csv";
             if (recorder.rowCount() == 0) recMsg = "ERRO: nada gravado ainda";
-            else if (recorder.save(path, e)) recMsg = "salvo: " + path;
+            else if (recorder.save(path, e)) { recMsg = "salvo!"; recLastPath = path; }
             else recMsg = "ERRO: " + e;
             recMsgFrames = 900;
         }
@@ -777,7 +984,7 @@ int main(int argc, char** argv) {
             drag.end();
         }
         if (jBMode == 1 && !scene.world->isValidBody(jB)) { jBMode = 0; jB = physics::kInvalidBodyId; jPickB = false; }
-        if (mainTab != 3) jPickB = false;
+        if (mainTab != 2) jPickB = false;   // V22: Juntas é a aba 2 (Cenas saiu das abas)
 
         // Alvo da câmera: centro do mundo (da cena) ou o corpo selecionado; a transição é suave.
         {
@@ -785,7 +992,7 @@ int main(int argc, char** argv) {
             if (pivotSelected && selected != physics::kInvalidBodyId) goal = viewer::toVec3f(renderPose(selected).position);
             // V19: WASD move a câmera pelo cenário (E sobe, Q desce, Shift acelera). O deslocamento acumulado
             // `camPan` soma ao alvo, senão o seguimento suave o devolveria ao centro a cada quadro.
-            if (!fileNameEdit && !importEdit) {
+            if (!fileNameEdit && !importEdit && !gSE.active) {
                 const float f = (IsKeyDown(KEY_W) ? 1.0f : 0.0f) - (IsKeyDown(KEY_S) ? 1.0f : 0.0f);
                 const float r = (IsKeyDown(KEY_D) ? 1.0f : 0.0f) - (IsKeyDown(KEY_A) ? 1.0f : 0.0f);
                 const float u = (IsKeyDown(KEY_E) ? 1.0f : 0.0f) - (IsKeyDown(KEY_Q) ? 1.0f : 0.0f);
@@ -863,8 +1070,8 @@ int main(int argc, char** argv) {
             for (int i = 0; i < 3; ++i) spPos[i] = static_cast<float>(placePt[i]);
             afterSpawn(viewer::spawnBody(scene, sp));
         } else if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !overGui && !(clickPlace && mainTab == 1)) {
-            const viewer::PickResult pick = viewer::pickBody(scene, rayO, rayD, physics::Real(200), pickStaticsOpt || mainTab == 3);
-            if (mainTab == 3) {   // aba Juntas (V14): o clique escolhe A / B e guarda o ponto clicado; sem arrastar
+            const viewer::PickResult pick = viewer::pickBody(scene, rayO, rayD, physics::Real(200), pickStaticsOpt || mainTab == 2);
+            if (mainTab == 2) {   // aba Juntas (V14): o clique escolhe A / B e guarda o ponto clicado; sem arrastar
                 physics::Vector3 pt;
                 if (viewer::pointOnRay(scene, rayO, rayD, pt)) { jClick = pt; jHasClick = true; }
                 if (jPickB) {
@@ -975,7 +1182,7 @@ int main(int argc, char** argv) {
                        Vector3{float(drag.targetWorld().x), float(drag.targetWorld().y), float(drag.targetWorld().z)}, ORANGE);
             DrawSphere(Vector3{float(drag.targetWorld().x), float(drag.targetWorld().y), float(drag.targetWorld().z)}, 0.08f, ORANGE);
         }
-        if (mainTab == 3) {   // V14: prévia da junta que será criada
+        if (mainTab == 2) {   // V14: prévia da junta que será criada
             auto v3 = [](const physics::Vector3& v) { return Vector3{float(v.x), float(v.y), float(v.z)}; };
             physics::Vector3 anchor;
             bool okAnchor = true;
@@ -1032,7 +1239,7 @@ int main(int argc, char** argv) {
             if (recorder.recording())
                 hudText(TextFormat("* REC  %d linhas  %.1f s", static_cast<int>(recorder.rowCount()), recorder.duration()), hx + 460, static_cast<int>(vp.y) + 8, 20, Color{255, 90, 90, 255});
             hudText(customActive ? TextFormat("[arquivo] %s   (%d corpos)", scene.name.c_str(), static_cast<int>(scene.bodies.size()))
-                                 : TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount),
+                                 : TextFormat("[%d/%d] %s   (%d corpos)", static_cast<int>(sceneIndex) + 1, static_cast<int>(lib.size()),
                                               scene.name.c_str(), static_cast<int>(scene.bodies.size())),
                      hx, static_cast<int>(vp.y) + 8, 22, RAYWHITE);
             if (selected != physics::kInvalidBodyId && scene.world->isValidBody(selected)) {
@@ -1059,17 +1266,17 @@ int main(int argc, char** argv) {
         // --- Colunas laterais: fundo, cabeçalho com o botão de recolher, e as bordas arrastáveis -----------------------
         for (viewer::DockSide side : {viewer::DockSide::Left, viewer::DockSide::Right}) {
             const viewer::RectF d = dock.dock(side);
-            DrawRectangle(static_cast<int>(d.x), static_cast<int>(d.y), static_cast<int>(d.w), static_cast<int>(d.h), Color{40, 43, 52, 255});
+            DrawRectangle(static_cast<int>(d.x), static_cast<int>(d.y), static_cast<int>(d.w), static_cast<int>(d.h), kDockBg);
             const bool left = side == viewer::DockSide::Left;
             const bool open = !dock.collapsed(side) && d.w > 120.0f;
             if (open) {
-                DrawText(left ? "Quaternio e mundo" : "Interpolacao, objeto e cenas", static_cast<int>(d.x) + 10, static_cast<int>(d.y) + 5, 16,
+                DrawText(left ? "Quaternio, mundo e gravacao" : "Interpolacao, cenas e objetos", static_cast<int>(d.x) + 10, static_cast<int>(d.y) + 5, 16,
                          Color{200, 205, 215, 255});
-                if (GuiButton(Rectangle{d.right() - 30.0f, d.y + 2.0f, 26.0f, 22.0f}, left ? "<" : ">")) {
+                if (fitButton(Rectangle{d.right() - 30.0f, d.y + 2.0f, 26.0f, 22.0f}, left ? "<" : ">")) {
                     dock.toggleCollapsed(side);
                     layoutDirty = true;
                 }
-            } else if (GuiButton(Rectangle{d.x + 1.0f, d.y + 2.0f, d.w - 2.0f, 22.0f}, left ? ">" : "<")) {
+            } else if (fitButton(Rectangle{d.x + 1.0f, d.y + 2.0f, d.w - 2.0f, 22.0f}, left ? ">" : "<")) {
                 dock.toggleCollapsed(side);
                 layoutDirty = true;
             }
@@ -1088,7 +1295,7 @@ int main(int argc, char** argv) {
             if (open) BeginScissorMode(static_cast<int>(body.x), static_cast<int>(body.y), static_cast<int>(body.w), static_cast<int>(body.h));
             else BeginScissorMode(0, 0, 0, 0);
             gTextRight = body.right() - kBar - 6.0f;   // V17: o texto dos painéis termina aqui
-            if (!fileNameEdit && !importEdit && (!open || !body.contains(mouse.x, mouse.y) || dock.dragging() || scrollDrag >= 0)) GuiLock();
+            if (!fileNameEdit && !importEdit && !gSE.active && (!open || !body.contains(mouse.x, mouse.y) || dock.dragging() || scrollDrag >= 0)) GuiLock();
         };
         auto endDock = [&]() {
             GuiUnlock();
@@ -1104,19 +1311,19 @@ int main(int argc, char** argv) {
                 bx += w + 6.0f;
                 return r;
             };
-            if (GuiButton(place(96.0f), timeCtl.paused() ? "Continuar" : "Pausar")) uiTogglePause = true;
-            if (GuiButton(place(60.0f), "Passo")) uiStep = true;
-            if (GuiButton(place(84.0f), "Reiniciar")) uiRestart = true;
+            if (fitButton(place(96.0f), timeCtl.paused() ? "Continuar" : "Pausar")) uiTogglePause = true;
+            if (fitButton(place(60.0f), "Passo")) uiStep = true;
+            if (fitButton(place(84.0f), "Reiniciar")) uiRestart = true;
             GuiLabel(place(34.0f), "Vel.");
             int sc = timeCtl.scaleIndex();
-            GuiToggleGroup(Rectangle{bx, by, 42.0f, bh}, "1x;1/2;1/4;1/10", &sc);
+            fitToggleGroup(Rectangle{bx, by, 42.0f, bh}, "1x;1/2;1/4;1/10", &sc);
             bx += 4.0f * 42.0f + 12.0f;
             timeCtl.setScaleIndex(sc);
-            if (GuiButton(place(26.0f), "<")) uiSceneDelta = -1;
-            GuiLabel(place(84.0f), customActive ? "arquivo" : TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(sceneCount)));
-            if (GuiButton(place(26.0f), ">")) uiSceneDelta = 1;
-            if (GuiButton(place(92.0f), "Reset cam")) uiResetCam = true;
-            if (GuiButton(place(150.0f), pivotSelected ? "Alvo: selecionado" : "Alvo: mundo")) uiPivot = true;
+            if (fitButton(place(26.0f), "<")) uiSceneDelta = -1;
+            GuiLabel(place(84.0f), customActive ? "arquivo" : TextFormat("cena %d/%d", static_cast<int>(sceneIndex) + 1, static_cast<int>(lib.size())));
+            if (fitButton(place(26.0f), ">")) uiSceneDelta = 1;
+            if (fitButton(place(92.0f), "Reset cam")) uiResetCam = true;
+            if (fitButton(place(150.0f), pivotSelected ? "Alvo: selecionado" : "Alvo: mundo")) uiPivot = true;
         }
 
         beginDock(viewer::DockSide::Left);
@@ -1166,14 +1373,243 @@ int main(int argc, char** argv) {
             panelText("(esta cena nao tem corpo em foco)", static_cast<int>(quatPanel.x) + 12, static_cast<int>(quatPanel.y) + 40, 18, kInkDim);
         }
 
+        // --- V24: esfera de arcball -----------------------------------------------------------------------------------
+        // Mostra a orientação do corpo em foco como 3 círculos máximos (um por eixo local) numa esfera, mais o eixo de
+        // rotação do quatérnio. Arrastar a esfera (com o corpo selecionado) gira o corpo: q = Δ · q0 (Shoemake).
+        GuiPanel(arcPanel, "Arcball (arraste para girar)");
+        {
+            static viewer::ArcballDrag arcDrag;
+            static physics::BodyId arcBody = physics::kInvalidBodyId;
+            const float arcR = std::max(40.0f, std::min(95.0f, (arcPanel.width - 24.0f) / 2.0f));
+            const float acx = arcPanel.x + arcPanel.width / 2.0f, acy = arcPanel.y + 34.0f + arcR;
+            const bool canDrag = hasFocus && selected != physics::kInvalidBodyId;
+            const viewer::ArcballView av = viewer::arcballViewFromCamera(orbit);
+            const Vector2 amp = GetMousePosition();
+            const double anx = static_cast<double>(amp.x - acx) / static_cast<double>(arcR);
+            const double any = -static_cast<double>(amp.y - acy) / static_cast<double>(arcR);
+            const bool overSphere = !GuiIsLocked() && anx * anx + any * any <= 1.0;
+            if (arcDrag.active() && (!canDrag || arcBody != selected || !IsMouseButtonDown(MOUSE_BUTTON_LEFT))) arcDrag.end();
+            if (canDrag && overSphere && !arcDrag.active() && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                arcDrag.begin(anx, any, focusPose.rotation, av);
+                arcBody = selected;
+            }
+            if (arcDrag.active()) {   // gira o corpo; zera ω para o motor não brigar com o gesto
+                viewer::setOrientationQuaternion(*scene.world, selected, arcDrag.update(anx, any, av));
+                viewer::setAngularVelocity(*scene.world, selected, physics::Vector3::zero());
+            }
+            const physics::Quaternion qd = arcDrag.active() ? scene.world->getBody(selected).getOrientation() : focusPose.rotation;
+            DrawCircle(static_cast<int>(acx), static_cast<int>(acy), arcR, Color{24, 26, 32, 255});
+            DrawCircleLines(static_cast<int>(acx), static_cast<int>(acy), arcR, (overSphere && canDrag) || arcDrag.active() ? Color{130, 170, 255, 255} : Color{96, 102, 118, 255});
+            if (hasFocus) {
+                const Color axisCol[3] = {Color{255, 95, 95, 255}, Color{110, 225, 120, 255}, Color{110, 160, 255, 255}};
+                constexpr int kSeg = 48;
+                viewer::ArcballPoint pts[kSeg];
+                for (int pass = 0; pass < 2; ++pass) {   // pass 0 = metade de trás (apagada), 1 = metade da frente
+                    for (int a = 0; a < 3; ++a) {
+                        viewer::arcballCircle(qd, a, av, pts, kSeg);
+                        for (int i = 0; i < kSeg; ++i) {
+                            const viewer::ArcballPoint& p0 = pts[i];
+                            const viewer::ArcballPoint& p1 = pts[(i + 1) % kSeg];
+                            const bool front = (p0.depth + p1.depth) * 0.5f >= 0.0f;
+                            if (front != (pass == 1)) continue;
+                            Color c = axisCol[a];
+                            if (!front) c.a = 70;
+                            DrawLineEx(Vector2{acx + p0.x * arcR, acy - p0.y * arcR}, Vector2{acx + p1.x * arcR, acy - p1.y * arcR}, front ? 2.0f : 1.0f, c);
+                        }
+                    }
+                }
+                // pontas dos eixos locais (x, y, z do corpo)
+                static const char* const kAxisName[3] = {"x", "y", "z"};
+                for (int a = 0; a < 3; ++a) {
+                    physics::Vector3 e(0, 0, 0);
+                    e[a] = physics::Real(1);
+                    const viewer::ArcballPoint tp = viewer::arcballProject(qd.rotate(e), av);
+                    const float tx = acx + tp.x * arcR, ty = acy - tp.y * arcR;
+                    DrawLineEx(Vector2{acx, acy}, Vector2{tx, ty}, 2.0f, tp.depth >= 0 ? axisCol[a] : Color{axisCol[a].r, axisCol[a].g, axisCol[a].b, 90});
+                    DrawCircle(static_cast<int>(tx), static_cast<int>(ty), 4.0f, axisCol[a]);
+                    DrawText(kAxisName[a], static_cast<int>(tx) + 6, static_cast<int>(ty) - 7, 14, axisCol[a]);
+                }
+                // eixo de rotação do quatérnio (eixo-ângulo): destaque do quatérnio
+                physics::Vector3 qaxis;
+                physics::Real qang = 0;
+                qd.toAxisAngle(qaxis, qang);
+                if (std::fabs(static_cast<double>(qang)) > 1e-4) {
+                    const viewer::ArcballPoint ap = viewer::arcballProject(qaxis, av);
+                    const Vector2 a0{acx - ap.x * arcR, acy + ap.y * arcR}, a1{acx + ap.x * arcR, acy - ap.y * arcR};
+                    DrawLineEx(a0, a1, 2.0f, Color{kAccent.r, kAccent.g, kAccent.b, 150});
+                    DrawCircle(static_cast<int>(a1.x), static_cast<int>(a1.y), 5.0f, kAccent);
+                }
+                const float ty0 = acy + arcR + 8.0f;
+                panelText(TextFormat("giro de %.1f graus em torno de (%+.2f %+.2f %+.2f)", static_cast<double>(qang) * 57.29577951308232,
+                                    static_cast<double>(qaxis.x), static_cast<double>(qaxis.y), static_cast<double>(qaxis.z)),
+                         static_cast<int>(arcPanel.x) + 12, static_cast<int>(ty0), 14, kAccent);
+                panelText(canDrag ? "x vermelho  y verde  z azul (eixos do corpo)" : "selecione o corpo (clique) para girar com o mouse",
+                         static_cast<int>(arcPanel.x) + 12, static_cast<int>(ty0) + 18, 14, canDrag ? kInkDim : kWarn);
+            } else {
+                panelText("(esta cena nao tem corpo em foco)", static_cast<int>(arcPanel.x) + 12, static_cast<int>(arcPanel.y) + 40, 18, kInkDim);
+            }
+        }
+
         endDock();
         beginDock(viewer::DockSide::Right);
+        // --- Painel Cenas (V22): fora do painel de objetos, no topo da coluna direita ---------------------------------
+        {
+            sceneListRect = viewer::RectF{};
+            GuiPanel(scenesPanel, "Cenas");
+            const float sx = scenesPanel.x + 12.0f, sw = scenesPanel.width - 24.0f;
+            float sy = scenesPanel.y + 32.0f;
+            panelText("nome do arquivo (sem extensao):", static_cast<int>(sx), static_cast<int>(sy), 14, kInkDim);
+            sy += 18.0f;
+            if (GuiTextBox(Rectangle{sx, sy, sw, 26.0f}, fileName, 48, fileNameEdit)) fileNameEdit = !fileNameEdit;
+            sy += 32.0f;
+            if (fitButton(Rectangle{sx, sy, sw / 2.0f - 4.0f, 28.0f}, "Salvar cena atual")) {
+                const std::string typed = fileName;
+                const std::string base = viewer::sanitizeSceneFileName(typed);
+                const std::string path = sceneDir + "/" + base + viewer::scenefile::kExtension;
+                const bool existed = lib.findFile(base) >= 0;
+                if (!typed.empty()) scene.name = typed;   // o nome digitado vira o nome da cena
+                std::string err;
+                if (viewer::saveSceneFile(scene, path, err)) {
+                    fileMsg = "salvo: " + base + viewer::scenefile::kExtension + (existed ? " (sobrescreveu)" : " (entrou na lista)");
+                    fileMsgErr = false;
+                    const std::size_t idx = lib.addFile(base);   // V22: a cena salva entra na lista (fim) e vira a atual
+                    sceneIndex = idx;
+                    customActive = false;
+                    libActive = static_cast<int>(idx);
+                    libDirty = true;
+                } else {
+                    fileMsg = "ERRO: " + err;
+                    fileMsgErr = true;
+                }
+                fileMsgFrames = 600;
+                fileNameEdit = false;
+                delConfirm = false;
+            }
+            if (fitButton(Rectangle{sx + sw / 2.0f + 4.0f, sy, sw / 2.0f - 4.0f, 28.0f}, "Atualizar lista")) {
+                // relê a pasta: arquivos novos entram no fim, os que sumiram saem; a ordem atual fica
+                const viewer::LibraryEntry cur = sceneIndex < lib.size() ? lib.at(sceneIndex) : viewer::LibraryEntry{};
+                lib.rebuild(viewer::listSceneFiles(sceneDir), lib.serialize());
+                const int found = cur.kind == viewer::LibraryEntry::Kind::Builtin ? lib.findBuiltin(cur.builtinIndex) : lib.findFile(cur.file);
+                if (found >= 0) {
+                    sceneIndex = static_cast<std::size_t>(found);
+                } else if (!lib.empty()) {   // a cena atual era um arquivo que sumiu: continua rodando, sem lugar na lista
+                    customActive = true;
+                    customText = viewer::serializeScene(scene);
+                    sceneIndex = std::min(sceneIndex, lib.size() - 1);
+                }
+                libActive = -1;
+                libDirty = true;
+                delConfirm = false;
+                fileMsg = "lista atualizada";
+                fileMsgErr = false;
+                fileMsgFrames = 300;
+            }
+            sy += 36.0f;
+            if (fitButton(Rectangle{sx, sy, sw / 2.0f - 4.0f, 28.0f}, "Nova (vazia)")) newSceneRequest = 1;
+            if (fitButton(Rectangle{sx + sw / 2.0f + 4.0f, sy, sw / 2.0f - 4.0f, 28.0f}, "Nova (so o chao)")) newSceneRequest = 2;
+            sy += 36.0f;
+            panelText(TextFormat("cenas (%d): setas e 1-9 seguem esta ordem", static_cast<int>(lib.size())), static_cast<int>(sx), static_cast<int>(sy), 14, kInkDim);
+            sy += 18.0f;
+            if (libActive >= static_cast<int>(lib.size())) libActive = -1;
+            std::string joined;
+            for (std::size_t i = 0; i < lib.size(); ++i) {
+                const viewer::LibraryEntry& e = lib.at(i);
+                std::string n = e.name;
+                std::replace(n.begin(), n.end(), ';', '_');   // ';' separa os itens da lista do raygui
+                const bool current = i == sceneIndex && !customActive;
+                joined += (i ? ";" : "") + std::string(current ? "> " : "  ") + std::to_string(i + 1) + ". " + n +
+                          (e.kind == viewer::LibraryEntry::Kind::File ? " (salva)" : "") + (e.broken ? " [ERRO]" : "");
+            }
+            sceneListRect = viewer::RectF{sx, sy, sw, viewer::panel::kSceneListH};
+            const int activeBefore = libActive;
+            GuiListView(Rectangle{sx, sy, sw, viewer::panel::kSceneListH}, joined.empty() ? "(nenhuma cena)" : joined.c_str(), &libScroll, &libActive);
+            if (libActive != activeBefore) delConfirm = false;
+            sy += viewer::panel::kSceneListH + 6.0f;
+            const bool hasSel = libActive >= 0 && libActive < static_cast<int>(lib.size());
+            const std::size_t li = hasSel ? static_cast<std::size_t>(libActive) : 0;
+            if (fitButton(Rectangle{sx, sy, sw / 2.0f - 4.0f, 28.0f}, "Subir") && hasSel) {
+                std::size_t ni = 0;
+                if (lib.moveUp(li, &ni)) {
+                    if (sceneIndex == li) sceneIndex = ni; else if (sceneIndex == ni) sceneIndex = li;
+                    libActive = static_cast<int>(ni);
+                    libDirty = true;
+                }
+                delConfirm = false;
+            }
+            if (fitButton(Rectangle{sx + sw / 2.0f + 4.0f, sy, sw / 2.0f - 4.0f, 28.0f}, "Descer") && hasSel) {
+                std::size_t ni = 0;
+                if (lib.moveDown(li, &ni)) {
+                    if (sceneIndex == li) sceneIndex = ni; else if (sceneIndex == ni) sceneIndex = li;
+                    libActive = static_cast<int>(ni);
+                    libDirty = true;
+                }
+                delConfirm = false;
+            }
+            sy += 34.0f;
+            if (fitButton(Rectangle{sx, sy, sw / 2.0f - 4.0f, 28.0f}, delConfirm ? "Confirmar apagar" : "Apagar") && hasSel) {
+                if (lib.size() <= 1) {
+                    fileMsg = "mantenha ao menos uma cena na lista";
+                    fileMsgErr = true;
+                    fileMsgFrames = 400;
+                } else if (!delConfirm) {
+                    delConfirm = true;
+                    const viewer::LibraryEntry& e = lib.at(li);
+                    fileMsg = e.kind == viewer::LibraryEntry::Kind::File ? "clique de novo: APAGA o arquivo " + e.file + ".scene do disco"
+                                                                         : "clique de novo: tira a cena original da lista (da para restaurar)";
+                    fileMsgErr = true;
+                    fileMsgFrames = 600;
+                } else {
+                    delConfirm = false;
+                    bool ok = true;
+                    const viewer::LibraryEntry e = lib.at(li);
+                    if (e.kind == viewer::LibraryEntry::Kind::File) {
+                        std::error_code ec;
+                        std::filesystem::remove(sceneDir + "/" + e.file + viewer::scenefile::kExtension, ec);
+                        ok = !ec;
+                        if (!ok) { fileMsg = "ERRO ao apagar o arquivo: " + ec.message(); fileMsgErr = true; fileMsgFrames = 600; }
+                    }
+                    if (ok && lib.remove(li)) {
+                        if (li < sceneIndex) {
+                            --sceneIndex;
+                        } else if (li == sceneIndex) {   // a cena que roda foi apagada: continua rodando, sem lugar na lista
+                            customActive = true;
+                            customText = viewer::serializeScene(scene);
+                            sceneIndex = (li + lib.size() - 1) % lib.size();
+                        }
+                        libActive = lib.empty() ? -1 : static_cast<int>(std::min(li, lib.size() - 1));
+                        libDirty = true;
+                        fileMsg = e.kind == viewer::LibraryEntry::Kind::File ? "apagado: " + e.file + ".scene" : "original tirada da lista: " + e.name;
+                        fileMsgErr = false;
+                        fileMsgFrames = 600;
+                    }
+                }
+            }
+            const std::size_t hidden = lib.hiddenBuiltinCount();
+            if (fitButton(Rectangle{sx + sw / 2.0f + 4.0f, sy, sw / 2.0f - 4.0f, 28.0f}, TextFormat("Restaurar originais (%d)", static_cast<int>(hidden))) && hidden > 0) {
+                const std::size_t back = lib.restoreBuiltins();
+                libDirty = true;
+                delConfirm = false;
+                fileMsg = "voltaram " + std::to_string(back) + " cena(s) original(is), no fim da lista";
+                fileMsgErr = false;
+                fileMsgFrames = 600;
+            }
+            sy += 34.0f;
+            if (fitButton(Rectangle{sx, sy, sw, 28.0f}, "Carregar a escolhida") && hasSel) {
+                gotoScene = libActive;
+                delConfirm = false;
+            }
+            sy += 34.0f;
+            if (fileMsgFrames > 0) {
+                --fileMsgFrames;
+                wrapPanelText(fileMsg, static_cast<int>(sx), static_cast<int>(sy), 14, fileMsgErr ? kWarn : kBlueInk, 2);
+            }
+        }
         // Painel da interpolação de render e do FPS.
         GuiPanel(interpPanel, "Interpolacao de render");
         {
             const float x0 = interpPanel.x + 12.0f, w = interpPanel.width - 24.0f;
             int active = static_cast<int>(mode);
-            GuiToggleGroup(Rectangle{x0, interpPanel.y + 34.0f, w / 3.0f, 30.0f}, "slerp;lerp;Euler", &active);
+            fitToggleGroup(Rectangle{x0, interpPanel.y + 34.0f, w / 3.0f, 30.0f}, "slerp;lerp;Euler", &active);
             mode = static_cast<viewer::InterpMode>(active);
             panelText(viewer::interpModeName(mode), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 72, 18, kInk);
             const char* help = "";
@@ -1182,7 +1618,9 @@ int main(int argc, char** argv) {
             if (mode == viewer::InterpMode::Euler) help = "interpola yaw/pitch/roll: caminho\ntorto; pula no gimbal lock";
             panelText(help, static_cast<int>(x0), static_cast<int>(interpPanel.y) + 96, 16, kInk);
             panelText(TextFormat("FPS de render: %d", fpsApplied), static_cast<int>(x0), static_cast<int>(interpPanel.y) + 144, 18, kInk);
-            GuiSlider(Rectangle{x0 + 24.0f, interpPanel.y + 168.0f, w - 64.0f, 22.0f}, "10", "240", &fpsSlider, 10.0f, 240.0f);
+            panelText("10", static_cast<int>(x0), static_cast<int>(interpPanel.y) + 171, 16, kInk);
+            panelText("240", static_cast<int>(x0 + w - 34.0f), static_cast<int>(interpPanel.y) + 171, 16, kInk);
+            sliderBox(Rectangle{x0 + 28.0f, interpPanel.y + 168.0f, w - 68.0f, 22.0f}, fpsSlider, 10.0f, 240.0f);
             const int wantedFps = static_cast<int>(std::lround(static_cast<double>(fpsSlider)));
             if (wantedFps != fpsApplied) {
                 fpsApplied = wantedFps;
@@ -1196,7 +1634,7 @@ int main(int argc, char** argv) {
             const bool selValid = world.isValidBody(selected);
             if (selValid && selected != lastSelected) {   // rascunho da orientação parte da orientação atual do corpo
                 lastSelected = selected;
-                const viewer::AxisAngleF aa0 = viewer::toAxisAngle(world.getBody(selected).getOrientation());
+                const viewer::AxisAngleF aa0 = viewer::toAxisAngle(scene.world->getBody(selected).getOrientation());
                 oAxisX = aa0.axis.x; oAxisY = aa0.axis.y; oAxisZ = aa0.axis.z;
                 oAngleDeg = aa0.angle * 57.29578f;
             }
@@ -1206,70 +1644,23 @@ int main(int argc, char** argv) {
                                                            : "Objetos"));
             const float ox = objPanel.x + 12.0f, ow = objPanel.width - 24.0f;
             float oy = objPanel.y + 32.0f;
-            GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Objeto;Adicionar;Cenas;Juntas", &mainTab);
+            fitToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Objeto;Adicionar;Juntas", &mainTab);
             oy += 36.0f;
-            const float labelW = 124.0f, valueW = 88.0f;
+            // V20: rótulo e valor proporcionais à largura da coluna (na coluna mais estreita a barra ficava com 70 px):
+            // a barra usa o que sobra; os textos encolhem a fonte (panelText) se não couberem.
+            const float labelW = std::min(124.0f, std::max(92.0f, ow * 0.34f)), valueW = std::min(88.0f, std::max(56.0f, ow * 0.20f));
             const float barW = ow - labelW - valueW - 8.0f;
-            auto sliderRow = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
+            auto sliderRow = [&](const char* name, float& v, float lo, float hi, const char* valueText, viewer::SliderUnit unit = viewer::SliderUnit{}) {
                 const Rectangle bar{ox + labelW, oy, barW, 20.0f};
-                const float before = v;
-                panelText(name, static_cast<int>(ox), static_cast<int>(oy) + 2, 16, kInk);
-                GuiSlider(bar, nullptr, nullptr, &v, lo, hi);
+                labelText(name, ox, oy + 2.0f, ox + labelW - 6.0f);   // V21: o rótulo termina antes da barra
+                const bool edited = sliderBox(bar, v, lo, hi, unit);
                 panelText(valueText, static_cast<int>(ox + labelW + barW) + 6, static_cast<int>(oy) + 2, 16, kInk);
                 oy += viewer::panel::kSliderStep;
-                return v != before && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && CheckCollisionPointRec(mouse, bar);
+                return edited;
             };
             using physics::Real;
-            if (mainTab == 2) {   // ---- Cenas: salvar e carregar (V12) ----
-                panelText("nome do arquivo (sem extensao):", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
-                oy += 18.0f;
-                if (GuiTextBox(Rectangle{ox, oy, ow, 26.0f}, fileName, 48, fileNameEdit)) fileNameEdit = !fileNameEdit;
-                oy += 32.0f;
-                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Salvar cena atual")) {
-                    const std::string typed = fileName;
-                    const std::string base = viewer::sanitizeSceneFileName(typed);
-                    const std::string path = sceneDir + "/" + base + viewer::scenefile::kExtension;
-                    const bool existed = std::find(sceneFiles.begin(), sceneFiles.end(), base) != sceneFiles.end();
-                    if (!typed.empty()) scene.name = typed;   // o nome digitado vira o nome da cena
-                    std::string err;
-                    if (viewer::saveSceneFile(scene, path, err)) {
-                        fileMsg = "salvo: " + base + viewer::scenefile::kExtension + (existed ? " (sobrescreveu)" : "");
-                        fileMsgErr = false;
-                        sceneFiles = viewer::listSceneFiles(sceneDir);
-                    } else {
-                        fileMsg = "ERRO: " + err;
-                        fileMsgErr = true;
-                    }
-                    fileMsgFrames = 600;
-                    fileNameEdit = false;
-                }
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Atualizar lista")) sceneFiles = viewer::listSceneFiles(sceneDir);
-                oy += 36.0f;
-                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Nova (vazia)")) newSceneRequest = 1;
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Nova (so o chao)")) newSceneRequest = 2;
-                oy += 36.0f;
-                panelText(TextFormat("arquivos em scenes/ (%d):", static_cast<int>(sceneFiles.size())), static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
-                oy += 18.0f;
-                std::string joined;
-                for (std::size_t i = 0; i < sceneFiles.size(); ++i) {
-                    std::string n = sceneFiles[i];
-                    std::replace(n.begin(), n.end(), ';', '_');   // ';' separa os itens da lista do raygui
-                    joined += (i ? ";" : "") + n;
-                }
-                fileListRect = viewer::RectF{ox, oy, ow, 104.0f};
-                GuiListView(Rectangle{ox, oy, ow, 104.0f}, joined.empty() ? "(nenhum arquivo)" : joined.c_str(), &fileScroll, &fileActive);
-                oy += 110.0f;
-                if (GuiButton(Rectangle{ox, oy, ow, 28.0f}, "Carregar o arquivo escolhido") &&
-                    fileActive >= 0 && fileActive < static_cast<int>(sceneFiles.size()))
-                    loadRequest = sceneFiles[static_cast<std::size_t>(fileActive)];
-                oy += 32.0f;
-                if (fileMsgFrames > 0) {
-                    --fileMsgFrames;
-                    panelText(fileMsg.size() > 40 ? (fileMsg.substr(0, 38) + "..").c_str() : fileMsg.c_str(), static_cast<int>(ox),
-                             static_cast<int>(oy), 14, fileMsgErr ? kWarn : kBlueInk);
-                }
-            } else if (mainTab == 1) {   // ---- Adicionar objeto (V8) ----
-                GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Forma;Posicao;Orient;Veloc", &addTab);
+            if (mainTab == 1) {   // ---- Adicionar objeto (V8) ----
+                fitToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Forma;Posicao;Orient;Veloc", &addTab);
                 oy += viewer::panel::kAddTabsStep;
                 if (addTab == 0) {   // forma, tamanho, massa, material
                     {   // V18: 3 linhas de 3 botões: 0-2, 3-5, 6-8 (8 = modelo 3D)
@@ -1279,7 +1670,7 @@ int main(int argc, char** argv) {
                         for (int r = 0; r < viewer::panel::kKindRows; ++r) {
                             int sel = orig / 3 == r ? orig % 3 : -1;
                             const int was = sel;
-                            GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, kRows[r], &sel);
+                            fitToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, kRows[r], &sel);
                             if (sel >= 0 && sel != was) pick = r * 3 + sel;
                             oy += viewer::panel::kKindRowStep;
                         }
@@ -1288,7 +1679,7 @@ int main(int argc, char** argv) {
                     const bool isModel = kindIdx == viewer::kSpawnKindCount;
                     modelToggle = isModel;
                     if (isModel) {
-                        if (GuiButton(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Atualizar lista")) {
+                        if (fitButton(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Atualizar lista")) {
                             modelFiles = viewer::listModelFiles(modelDir);
                             modelLoaded = -2;
                             modelActive = -1;
@@ -1310,7 +1701,7 @@ int main(int argc, char** argv) {
                         {
                             const float btnW = 84.0f;
                             if (GuiTextBox(Rectangle{ox, oy + 17.0f, ow - btnW - 4.0f, 26.0f}, importPathBuf, 299, importEdit)) importEdit = !importEdit;
-                            if (GuiButton(Rectangle{ox + ow - btnW, oy + 17.0f, btnW, 26.0f}, "Importar")) {
+                            if (fitButton(Rectangle{ox + ow - btnW, oy + 17.0f, btnW, 26.0f}, "Importar")) {
                                 std::string pth = importPathBuf;
                                 while (!pth.empty() && (pth.back() == ' ' || pth.back() == '\n' || pth.back() == '\r')) pth.pop_back();
                                 while (!pth.empty() && (pth.front() == ' ' || pth.front() == '"')) pth.erase(pth.begin());
@@ -1388,7 +1779,7 @@ int main(int argc, char** argv) {
                         panelText("colisor (forma fisica do corpo):", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
                         {
                             const int before = colliderIdx;
-                            GuiToggleGroup(Rectangle{ox, oy + 16.0f, ow / 5.0f, 26.0f}, "Fecho;Caixa;Esfera;Capsula;Cilindro", &colliderIdx);
+                            fitToggleGroup(Rectangle{ox, oy + 16.0f, ow / 5.0f, 26.0f}, "Fecho;Caixa;Esfera;Capsula;Cilindro", &colliderIdx);
                             if (colliderIdx != before) modelLoaded = -2;   // refaz o resumo com o novo colisor
                             static const char* const kWhy[5] = {"convexo fiel ao modelo (colisao mais exata)", "caixa envolvente: estavel, sobra folga nos cantos",
                                                                  "esfera envolvente: rola, sobra bastante folga",
@@ -1399,13 +1790,13 @@ int main(int argc, char** argv) {
                         oy += viewer::panel::kColliderStep;
                         if (colliderIdx >= 3) {   // V18: ajuste fino sobre o ajuste automatico
                             const float r0 = tuneR, h0 = tuneH;
-                            sliderRow("raio do colisor", tuneR, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneR * 100.0f)));
-                            sliderRow("altura do colisor", tuneH, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneH * 100.0f)));
+                            sliderRow("raio do colisor", tuneR, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneR * 100.0f)), viewer::SliderUnit{100.0f, false});
+                            sliderRow("altura do colisor", tuneH, viewer::kMinTuning, viewer::kMaxTuning, TextFormat("%.0f%%", static_cast<double>(tuneH * 100.0f)), viewer::SliderUnit{100.0f, false});
                             if (tuneR != r0 || tuneH != h0) modelLoaded = -2;
                         }
                     }
                     sliderRow(isModel ? "maior dimensao" : "tamanho", sizeF, 0.2f, 4.0f, TextFormat("%.2f m", static_cast<double>(sizeF)));
-                    sliderRow("massa", massS, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(massS * massS)));
+                    sliderRow("massa", massS, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(massS * massS)), viewer::SliderUnit{1.0f, true});
                     sliderRow("atrito", fricF, 0.0f, 2.0f, TextFormat("%.2f", static_cast<double>(fricF)));
                     sliderRow("restituicao", restF, 0.0f, 1.0f, TextFormat("%.2f", static_cast<double>(restF)));
                     if (kindIdx == 0) {   // V14: dimensões por eixo (paredes, plataformas, rampas)
@@ -1415,13 +1806,13 @@ int main(int argc, char** argv) {
                                       TextFormat("%.2f m", static_cast<double>(std::min(40.0f, std::max(0.05f, sizeF * spBox[i])))));
                     }
                     if (kindIdx == 6 || kindIdx == 7) {   // V18: capsula/cilindro
-                        sliderRow("raio", spAxisR, 0.1f, 2.0f, TextFormat("%.2f m", static_cast<double>(std::min(20.0f, std::max(0.02f, sizeF * spAxisR)))));
-                        sliderRow("altura", spAxisH, 0.2f, 6.0f, TextFormat("%.2f m", static_cast<double>(std::min(40.0f, std::max(0.04f, sizeF * spAxisH)))));
+                        sliderRow("raio", spAxisR, 0.1f, 2.0f, TextFormat("%.2f m", static_cast<double>(std::min(20.0f, std::max(0.02f, sizeF * spAxisR)))), viewer::SliderUnit{sizeF, false});
+                        sliderRow("altura", spAxisH, 0.2f, 6.0f, TextFormat("%.2f m", static_cast<double>(std::min(40.0f, std::max(0.04f, sizeF * spAxisH)))), viewer::SliderUnit{sizeF, false});
                     }
-                    GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " estatico (nao se move)", &spStatic);
+                    checkLabel(ox, oy, " estatico (nao se move)", &spStatic);
                     if (kindIdx == viewer::kSpawnKindCount) {
                         oy += viewer::panel::kCheckStep;
-                        GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " mostrar o colisor (fio)", &gShowHullWire);
+                        checkLabel(ox, oy, " mostrar o colisor (fio)", &gShowHullWire);
                     }
                 } else if (addTab == 1) {   // posição e velocidade de lançamento
                     sliderRow("x", spPos[0], -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(spPos[0])));
@@ -1430,7 +1821,7 @@ int main(int argc, char** argv) {
                     sliderRow("veloc. lanc.", launchSpd, 1.0f, 40.0f, TextFormat("%.1f m/s", static_cast<double>(launchSpd)));
                     panelText("lancar: sai 2 m a frente da camera", static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kInkDim);
                 } else if (addTab == 2) {   // orientação inicial: eixo-ângulo OU quatérnio
-                    GuiToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Eixo-angulo;Quaternio", &qMode);
+                    fitToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Eixo-angulo;Quaternio", &qMode);
                     oy += 32.0f;
                     if (qMode == 0) {
                         sliderRow("eixo x", spAxis[0], -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(spAxis[0])));
@@ -1457,22 +1848,22 @@ int main(int argc, char** argv) {
                 }
                 // Rodapé fixo: posicionar com clique + botões Adicionar / Lançar.
                 const float by = objPanel.y + objPanel.height - viewer::panel::kFooter;
-                GuiCheckBox(Rectangle{ox, by, 20.0f, 20.0f}, " posicionar com clique", &clickPlace);
-                if (GuiButton(Rectangle{ox, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Adicionar")) afterSpawn(viewer::spawnBody(scene, makeSpawn()));
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Lancar da camera")) {
+                checkLabel(ox, by, " posicionar com clique", &clickPlace);
+                if (fitButton(Rectangle{ox, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Adicionar")) afterSpawn(viewer::spawnBody(scene, makeSpawn()));
+                if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, by + 26.0f, ow / 2.0f - 4.0f, 28.0f}, "Lancar da camera")) {
                     const physics::Vector3 camPos(cam.position.x, cam.position.y, cam.position.z);
                     const physics::Vector3 camDir(cam.target.x - cam.position.x, cam.target.y - cam.position.y, cam.target.z - cam.position.z);
                     afterSpawn(viewer::launchFrom(scene, makeSpawn(), camPos, camDir, static_cast<physics::Real>(launchSpd)));
                 }
-            } else if (mainTab == 3) {   // ---- Juntas (V14): dobradiça, bola-soquete e distância ----
-                GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Dobradica;Bola-soquete;Distancia", &jKind);
+            } else if (mainTab == 2) {   // ---- Juntas (V14): dobradiça, bola-soquete e distância ----
+                fitToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Dobradica;Bola-soquete;Distancia", &jKind);
                 oy += 32.0f;
                 panelText(selValid ? TextFormat("A: corpo %u (o selecionado)", static_cast<unsigned>(selected))
                                   : "A: clique num corpo da cena", static_cast<int>(ox), static_cast<int>(oy) + 1, 14, selValid ? kInk : kWarn);
                 oy += 18.0f;
                 int bSel = jPickB ? 2 : (jBMode == 1 ? 1 : 0);
                 const int bOrig = bSel;
-                GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "B: mundo;B: corpo;B: clicar", &bSel);
+                fitToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "B: mundo;B: corpo;B: clicar", &bSel);
                 if (bSel != bOrig) {
                     jPickB = (bSel == 2) || (bSel == 1 && !world.isValidBody(jB));
                     jBMode = (bSel == 0) ? 0 : 1;
@@ -1482,7 +1873,7 @@ int main(int argc, char** argv) {
                 panelText(jPickB ? "B: clique no corpo B na cena..." : (jBMode == 1 ? TextFormat("B: corpo %u", static_cast<unsigned>(jB)) : "B: o mundo (cria um pivo fixo)"),
                          static_cast<int>(ox), static_cast<int>(oy) + 1, 14, jPickB ? kAccent : kInk);
                 oy += 18.0f;
-                GuiToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Sliders;Ponto clicado;Centro de A", &jAnchorMode);
+                fitToggleGroup(Rectangle{ox, oy, ow / 3.0f, 26.0f}, "Sliders;Ponto clicado;Centro de A", &jAnchorMode);
                 oy += 32.0f;
                 if (jAnchorMode == 0) {
                     sliderRow("ancora x", jAnchor[0], -12.0f, 12.0f, TextFormat("%+.2f m", static_cast<double>(jAnchor[0])));
@@ -1506,9 +1897,9 @@ int main(int argc, char** argv) {
                     panelText("distancia: pontas = centro de A e B/ancora", static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kInkDim);
                     oy += 26.0f;
                 }
-                GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " os dois corpos colidem entre si", &jCollide);
+                checkLabel(ox, oy, " os dois corpos colidem entre si", &jCollide);
                 oy += 28.0f;
-                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Criar junta")) {
+                if (fitButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Criar junta")) {
                     viewer::JointParams jp;
                     jp.kind = static_cast<viewer::JointKind>(jKind);
                     jp.a = selected;
@@ -1533,7 +1924,7 @@ int main(int argc, char** argv) {
                     }
                     jMsgFrames = 420;
                 }
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Apagar a ultima")) {
+                if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Apagar a ultima")) {
                     jMsg = viewer::destroyLastJoint(scene) ? "ultima junta apagada" : "nao ha juntas";
                     jMsgErr = false;
                     jMsgFrames = 420;
@@ -1551,7 +1942,7 @@ int main(int argc, char** argv) {
                 panelText("Clique num corpo na cena, ou use a aba", static_cast<int>(ox), static_cast<int>(oy) + 32, 14, kInkDim);
                 panelText("Adicionar para criar um novo.", static_cast<int>(ox), static_cast<int>(oy) + 50, 14, kInkDim);
             } else {
-            GuiToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
+            fitToggleGroup(Rectangle{ox, oy, ow / 4.0f, 26.0f}, "Material;Posicao;Veloc;Orient", &objTab);
             oy += 36.0f;
             viewer::BodyParams bp;
             viewer::readParams(world, selected, bp);
@@ -1563,14 +1954,14 @@ int main(int argc, char** argv) {
                 if (sliderRow("restituicao", r, 0.0f, 1.0f, TextFormat("%.2f", static_cast<double>(r)))) viewer::setRestitution(world, selected, static_cast<Real>(r));
                 panelText("corpo estatico: massa infinita", static_cast<int>(ox), static_cast<int>(oy) + 2, 14, kInkDim);
                 oy += 26.0f;
-                if (GuiButton(Rectangle{ox, oy, ow, 28.0f}, "Apagar este objeto (Del)")) {
+                if (fitButton(Rectangle{ox, oy, ow, 28.0f}, "Apagar este objeto (Del)")) {
                     drag.end();
                     viewer::deleteBody(scene, selected, true);
                     selected = physics::kInvalidBodyId;
                 }
             } else if (objTab == 0) {   // Material
                 float m = std::sqrt(static_cast<float>(bp.mass));   // escala √: mais precisão nas massas pequenas
-                if (sliderRow("massa", m, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(m * m))))
+                if (sliderRow("massa", m, 0.2236f, 10.0f, TextFormat("%.2f kg", static_cast<double>(m * m)), viewer::SliderUnit{1.0f, true}))
                     viewer::setMass(world, selected, static_cast<Real>(m * m));
                 float f = static_cast<float>(bp.friction);
                 if (sliderRow("atrito", f, 0.0f, 2.0f, TextFormat("%.2f", static_cast<double>(f)))) viewer::setFriction(world, selected, static_cast<Real>(f));
@@ -1583,7 +1974,7 @@ int main(int argc, char** argv) {
                 float gs = static_cast<float>(bp.gravityScale);
                 if (sliderRow("escala grav.", gs, -2.0f, 5.0f, TextFormat("%+.2f", static_cast<double>(gs)))) viewer::setGravityScale(world, selected, static_cast<Real>(gs));
                 bool allow = bp.allowSleep;
-                GuiCheckBox(Rectangle{ox, oy, 20.0f, 20.0f}, " pode dormir (sleeping)", &allow);
+                checkLabel(ox, oy, " pode dormir (sleeping)", &allow);
                 if (allow != bp.allowSleep) viewer::setAllowSleep(world, selected, allow);
             } else if (objTab == 1) {   // Posicao + acordar/dormir
                 const physics::Vector3 pos = body.getTransform().position;
@@ -1599,8 +1990,8 @@ int main(int argc, char** argv) {
                 } else {
                 panelText(bp.awake ? "estado: acordado" : "estado: dormindo", static_cast<int>(ox), static_cast<int>(oy), 16, bp.awake ? kInkDim : kBlueInk);
                 oy += 24.0f;
-                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Acordar")) viewer::setAwake(world, selected, true);
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Dormir")) viewer::setAwake(world, selected, false);
+                if (fitButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Acordar")) viewer::setAwake(world, selected, true);
+                if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Dormir")) viewer::setAwake(world, selected, false);
                 }
             } else if (objTab == 2 && body.isStatic()) {
                 panelText("estatico: nao tem velocidade", static_cast<int>(ox), static_cast<int>(oy) + 4, 14, kInkDim);
@@ -1616,23 +2007,23 @@ int main(int argc, char** argv) {
                 if (chV) viewer::setLinearVelocity(world, selected, physics::Vector3(vv[0], vv[1], vv[2]));
                 if (chW) viewer::setAngularVelocity(world, selected, physics::Vector3(ww[0], ww[1], ww[2]));
                 oy += 2.0f;
-                if (GuiButton(Rectangle{ox, oy, ow, 28.0f}, "Zerar velocidades")) viewer::zeroVelocities(world, selected);
+                if (fitButton(Rectangle{ox, oy, ow, 28.0f}, "Zerar velocidades")) viewer::zeroVelocities(world, selected);
             } else {   // Orientação: eixo + ângulo -> quatérnio
                 sliderRow("eixo x", oAxisX, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisX)));
                 sliderRow("eixo y", oAxisY, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisY)));
                 sliderRow("eixo z", oAxisZ, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisZ)));
                 sliderRow("angulo", oAngleDeg, 0.0f, 360.0f, TextFormat("%.0f gr", static_cast<double>(oAngleDeg)));
                 oy += 2.0f;
-                if (GuiButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Aplicar q"))
+                if (fitButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Aplicar q"))
                     viewer::setOrientationAxisAngle(world, selected, physics::Vector3(oAxisX, oAxisY, oAxisZ),
                                                     static_cast<Real>(oAngleDeg * 0.017453292519943295f));
-                if (GuiButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
+                if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
                 oy += 34.0f;
                 panelText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
             }
             }
             if (mainTab == 0)   // V14: permite clicar no cenário estático (chão, paredes) para editá-lo
-                GuiCheckBox(Rectangle{ox, objPanel.y + objPanel.height - 30.0f, 20.0f, 20.0f}, " clicar tambem em estaticos", &pickStaticsOpt);
+                checkLabel(ox, objPanel.y + objPanel.height - 30.0f, " clicar tambem em estaticos", &pickStaticsOpt);
         }
 
         endDock();
@@ -1644,14 +2035,14 @@ int main(int argc, char** argv) {
             GuiPanel(worldPanel, "Mundo e debug (M esconde)");
             const float wx = worldPanel.x + 12.0f, ww = worldPanel.width - 24.0f;
             float wy = worldPanel.y + 30.0f;
-            GuiToggleGroup(Rectangle{wx, wy, ww / 5.0f, 26.0f}, "Mundo;Solver;Debug;Stats;Evento", &worldTab);
+            fitToggleGroup(Rectangle{wx, wy, ww / 5.0f, 26.0f}, "Mundo;Solver;Debug;Stats;Evento", &worldTab);
             wy += 34.0f;
-            const float labelW = 128.0f, valueW = 96.0f;
+            const float labelW = std::min(128.0f, std::max(96.0f, ww * 0.36f)), valueW = std::min(96.0f, std::max(60.0f, ww * 0.22f));
             const float barW = ww - labelW - valueW - 8.0f;
             // Uma linha de slider: devolve true se o usuário mexeu; o valor aparece à direita.
-            auto row = [&](const char* name, float& v, float lo, float hi, const char* valueText) {
-                panelText(name, static_cast<int>(wx), static_cast<int>(wy) + 2, 16, kInk);
-                const bool edited = sliderEdited(Rectangle{wx + labelW, wy, barW, 20.0f}, v, lo, hi);
+            auto row = [&](const char* name, float& v, float lo, float hi, const char* valueText, viewer::SliderUnit unit = viewer::SliderUnit{}) {
+                labelText(name, wx, wy + 2.0f, wx + labelW - 6.0f);   // V21
+                const bool edited = sliderBox(Rectangle{wx + labelW, wy, barW, 20.0f}, v, lo, hi, unit);
                 panelText(valueText, static_cast<int>(wx + labelW + barW) + 6, static_cast<int>(wy) + 2, 16, kInk);
                 wy += 26.0f;
                 return edited;
@@ -1667,7 +2058,7 @@ int main(int argc, char** argv) {
                 float hz = static_cast<float>(1.0 / static_cast<double>(wp.fixedDt));
                 if (row("fisica (passo)", hz, 10.0f, 240.0f, TextFormat("%.0f Hz", static_cast<double>(hz)))) { wp.fixedDt = Real(1) / static_cast<Real>(hz); changed = true; }
                 bool sl = wp.sleepEnabled;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " sleeping ligado", &sl);
+                checkLabel(wx, wy, " sleeping ligado", &sl);
                 if (sl != wp.sleepEnabled) { wp.sleepEnabled = sl; changed = true; }
                 wy += 26.0f;
                 float st = static_cast<float>(wp.sleepTime);
@@ -1677,12 +2068,18 @@ int main(int argc, char** argv) {
                 if (row("iter. veloc.", vi, 1.0f, 50.0f, TextFormat("%d", static_cast<int>(std::lround(static_cast<double>(vi)))))) { wp.velocityIterations = static_cast<int>(std::lround(static_cast<double>(vi))); changed = true; }
                 if (row("iter. posicao", pi, 0.0f, 20.0f, TextFormat("%d%s", static_cast<int>(std::lround(static_cast<double>(pi))), pi < 0.5f ? " (Baumg.)" : ""))) { wp.positionIterations = static_cast<int>(std::lround(static_cast<double>(pi))); changed = true; }
                 float ls = static_cast<float>(wp.linearSlop), vs = static_cast<float>(wp.velocitySlop);
-                if (row("slop linear", ls, 0.0f, 0.05f, TextFormat("%.1f mm", static_cast<double>(ls) * 1000.0))) { wp.linearSlop = ls; changed = true; }
+                if (row("slop linear", ls, 0.0f, 0.05f, TextFormat("%.1f mm", static_cast<double>(ls) * 1000.0), viewer::SliderUnit{1000.0f, false})) { wp.linearSlop = ls; changed = true; }
                 if (row("slop veloc.", vs, 0.0f, 2.0f, TextFormat("%.2f m/s", static_cast<double>(vs)))) { wp.velocitySlop = vs; changed = true; }
                 bool ws = wp.warmStarting;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " warm starting", &ws);
+                checkLabel(wx, wy, " warm starting", &ws);
                 if (ws != wp.warmStarting) { wp.warmStarting = ws; changed = true; }
                 wy += 26.0f;
+                bool oe = wp.orientationExponential;   // V24
+                checkLabel(wx, wy, " orientacao: exponencial de quaternio", &oe);
+                if (oe != wp.orientationExponential) { wp.orientationExponential = oe; changed = true; }
+                wy += 26.0f;
+                panelText("desligado = Euler: q + 1/2 dt (0,w) q", static_cast<int>(wx), static_cast<int>(wy), 14, kInkDim);
+                wy += 18.0f;
                 panelText("menos iteracoes: mais barato, mais mole", static_cast<int>(wx), static_cast<int>(wy), 14, kInkDim);
             } else if (worldTab == 2) {   // Debug
                 const std::vector<viewer::DebugFlagInfo>& table = viewer::debugFlagTable();
@@ -1690,30 +2087,30 @@ int main(int argc, char** argv) {
                 for (std::size_t i = 0; i < table.size(); ++i) {
                     const float cx = wx + (i < 5 ? 0.0f : colW), cy = wy + static_cast<float>(i < 5 ? i : i - 5) * 24.0f;
                     bool on = (dbgFlags & table[i].flag) != 0;
-                    GuiCheckBox(Rectangle{cx, cy, 20.0f, 20.0f}, TextFormat(" %s", table[i].label), &on);
+                    checkLabel(cx, cy, TextFormat(" %s", table[i].label), &on, cx + colW - 6.0f);   // V20: o rótulo não invade a outra coluna
                     if (on) dbgFlags |= table[i].flag; else dbgFlags &= ~table[i].flag;
                 }
                 wy += 5.0f * 24.0f + 6.0f;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " esconder modelos (so o debug)", &hideModels);
+                checkLabel(wx, wy, " esconder modelos (so o debug)", &hideModels);
                 wy += 30.0f;
-                if (GuiButton(Rectangle{wx, wy, ww / 2.0f - 4.0f, 26.0f}, "Padrao")) dbgFlags = static_cast<std::uint32_t>(physics::kDebugDefault);
-                if (GuiButton(Rectangle{wx + ww / 2.0f + 4.0f, wy, ww / 2.0f - 4.0f, 26.0f}, "Desligar")) dbgFlags = 0;
+                if (fitButton(Rectangle{wx, wy, ww / 2.0f - 4.0f, 26.0f}, "Padrao")) dbgFlags = static_cast<std::uint32_t>(physics::kDebugDefault);
+                if (fitButton(Rectangle{wx + ww / 2.0f + 4.0f, wy, ww / 2.0f - 4.0f, 26.0f}, "Desligar")) dbgFlags = 0;
             } else if (worldTab == 4) {   // Evento (V9)
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " cor por estado (dormindo = azul)", &tintOn);
+                checkLabel(wx, wy, " cor por estado (dormindo = azul)", &tintOn);
                 wy += 24.0f;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " flash no inicio do contato", &flashOn);
+                checkLabel(wx, wy, " flash no inicio do contato", &flashOn);
                 wy += 24.0f;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " aneis nos pontos de impacto", &ringsOn);
+                checkLabel(wx, wy, " aneis nos pontos de impacto", &ringsOn);
                 wy += 30.0f;
                 const physics::WorldStats st = world.getStats();
                 auto line = [&](const char* text) { panelText(text, static_cast<int>(wx), static_cast<int>(wy), 16, kInk); wy += 19.0f; };
                 line(TextFormat("contatos agora %d   dormindo %d de %d", static_cast<int>(world.getContacts().size()), st.sleepingBodies, st.awakeBodies + st.sleepingBodies));
                 line(TextFormat("inicios %llu   fins %llu", static_cast<unsigned long long>(tracker.begins()), static_cast<unsigned long long>(tracker.ends())));
                 line(TextFormat("impacto: ultimo %.1f   maximo %.1f m/s", static_cast<double>(tracker.lastImpact()), static_cast<double>(tracker.maxImpact())));
-                if (GuiButton(Rectangle{wx, wy + 4.0f, ww, 24.0f}, "Zerar contadores")) tracker.reset();
+                if (fitButton(Rectangle{wx, wy + 4.0f, ww, 24.0f}, "Zerar contadores")) tracker.reset();
             } else {   // Stats
                 bool prof = profilingOn;
-                GuiCheckBox(Rectangle{wx, wy, 20.0f, 20.0f}, " medir tempos (profiling)", &prof);
+                checkLabel(wx, wy, " medir tempos (profiling)", &prof);
                 if (prof != profilingOn) { profilingOn = prof; world.setProfilingEnabled(profilingOn); }
                 wy += 28.0f;
                 const physics::WorldStats st = world.getStats();
@@ -1734,7 +2131,7 @@ int main(int argc, char** argv) {
             // Rodapé das abas Mundo e Solver: restaurar os valores com que a cena foi criada.
             if (worldTab <= 1) {
                 wy = worldPanel.y + worldPanel.height - 36.0f;
-                if (GuiButton(Rectangle{wx, wy, ww, 26.0f}, "Restaurar padroes da cena")) { wp = sceneDefaults; changed = true; }
+                if (fitButton(Rectangle{wx, wy, ww, 26.0f}, "Restaurar padroes da cena")) { wp = sceneDefaults; changed = true; }
             }
             if (changed) viewer::applyWorld(world, wp);
         }
@@ -1744,10 +2141,10 @@ int main(int argc, char** argv) {
             GuiPanel(recPanel, "Gravar trajetoria (CSV)   F7");
             const float rx = recPanel.x + 12.0f, rw = recPanel.width - 24.0f;
             float ry = recPanel.y + 30.0f;
-            GuiToggleGroup(Rectangle{rx, ry, rw / 2.0f, 26.0f}, "Selecionado;Todos", &recTarget);
+            fitToggleGroup(Rectangle{rx, ry, rw / 2.0f, 26.0f}, "Selecionado;Todos", &recTarget);
             ry += 32.0f;
-            if (GuiButton(Rectangle{rx, ry, rw / 2.0f - 3.0f, 28.0f}, recorder.recording() ? "Parar" : "Gravar")) uiRecToggle = true;
-            if (GuiButton(Rectangle{rx + rw / 2.0f + 3.0f, ry, rw / 2.0f - 3.0f, 28.0f}, "Salvar CSV")) uiRecSave = true;
+            if (fitButton(Rectangle{rx, ry, rw / 2.0f - 3.0f, 28.0f}, recorder.recording() ? "Parar" : "Gravar")) uiRecToggle = true;
+            if (fitButton(Rectangle{rx + rw / 2.0f + 3.0f, ry, rw / 2.0f - 3.0f, 28.0f}, "Salvar CSV")) uiRecSave = true;
             ry += 34.0f;
             panelText(recorder.recording() ? TextFormat("* gravando: %d linhas, %.2f s", static_cast<int>(recorder.rowCount()), recorder.duration())
                                          : TextFormat("parado: %d linhas, %.2f s", static_cast<int>(recorder.rowCount()), recorder.duration()),
@@ -1758,6 +2155,13 @@ int main(int argc, char** argv) {
             panelText("Euler, v, w   (so grava com a fisica andando)", static_cast<int>(rx), static_cast<int>(ry), 14, kInk);
             ry += 18.0f;
             if (recMsgFrames > 0 && !recMsg.empty()) panelText(recMsg.c_str(), static_cast<int>(rx), static_cast<int>(ry), 14, kAccent);
+            ry += 18.0f;
+            if (!recLastPath.empty()) {   // V20: o caminho inteiro, em várias linhas (antes era cortado com "..")
+                panelText("ultimo CSV salvo em:", static_cast<int>(rx), static_cast<int>(ry), 14, kInkDim);
+                ry += 16.0f;
+                ry += wrapPanelText(recLastPath, static_cast<int>(rx), static_cast<int>(ry), 14, kAccent, viewer::panel::kRecPathLines) + 4.0f;
+                if (fitButton(Rectangle{rx, ry, rw, 24.0f}, "Copiar caminho")) SetClipboardText(recLastPath.c_str());
+            }
         }
 
         endDock();
@@ -1773,6 +2177,13 @@ int main(int argc, char** argv) {
             DrawRectangle(static_cast<int>(track.x), static_cast<int>(track.y), static_cast<int>(track.w), static_cast<int>(track.h), Color{28, 30, 38, 255});
             DrawRectangle(static_cast<int>(track.x) + 2, static_cast<int>(track.y + sc.thumbTop(track.h)), static_cast<int>(track.w) - 4,
                           static_cast<int>(sc.thumbHeight(track.h)), scrollDrag == side ? Color{150, 190, 255, 255} : Color{110, 118, 138, 255});
+        }
+        if (libDirty) {   // V22: ordem e remoções das cenas (scenes/biblioteca.txt)
+            std::error_code ec;
+            std::filesystem::create_directories(sceneDir, ec);
+            std::ofstream f(libPath, std::ios::trunc);
+            if (f) f << lib.serialize();
+            libDirty = false;
         }
         if (layoutDirty && !dock.dragging()) {
             std::error_code ec;

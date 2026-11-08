@@ -13,8 +13,11 @@ constexpr float kPad = 8.0f;                 ///< espaço entre painéis de uma 
 // Coluna esquerda
 constexpr float kQuatH = 244.0f;             ///< painel do quatérnio (cabe a linha do gimbal lock)
 constexpr float kQuatContentEnd = 220.0f;    ///< onde termina a última linha (gimbal lock): 34+24+24+28+22+26+46 + 16 de fonte
-constexpr float kWorldH = 270.0f;            ///< painel do mundo e debug
-constexpr float kRecH = 176.0f;              ///< painel de gravação CSV (V16)
+constexpr float kArcballH = 268.0f;          ///< V24: painel da esfera de arcball (cabeçalho 32 + esfera 190 + textos)
+constexpr float kWorldH = 296.0f;            ///< painel do mundo e debug (V24: +26 pela caixa "orientacao exponencial")
+constexpr int kRecPathLines = 4;              ///< V20: linhas para o caminho completo do último CSV salvo
+/// painel de gravação CSV: V16 = 176; V20 soma a linha de aviso, o título do caminho, as linhas do caminho e o botão "Copiar caminho".
+constexpr float kRecH = 176.0f + 2.0f + 16.0f + static_cast<float>(kRecPathLines) * 16.0f + 4.0f + 24.0f;   // = 286
 
 // Coluna direita
 constexpr float kInterpH = 214.0f;           ///< painel da interpolação
@@ -58,7 +61,10 @@ inline float addFormHeight(bool box, bool model, bool axisShape = false, bool tu
 /// Altura mínima das outras abas do painel de objetos (Posicao, Orient, Veloc: cabem em bem menos).
 constexpr float kAddOtherTabsH = 440.0f;
 constexpr float kObjectTabH = 336.0f;
-constexpr float kScenesTabH = 392.0f;
+/// V22: painel Cenas (próprio, no topo da coluna direita): título 32 + rótulo 18 + nome 32 + salvar 36 + novas 36 + título da
+/// lista 18 + lista + 6 + subir/descer 34 + apagar/restaurar 34 + carregar 34 + 2 linhas de aviso 34 + margem 10.
+constexpr float kSceneListH = 150.0f;
+constexpr float kScenesH = 32.0f + 18.0f + 32.0f + 36.0f + 36.0f + 18.0f + kSceneListH + 6.0f + 34.0f + 34.0f + 34.0f + 34.0f + 10.0f;   // = 474
 constexpr float kJointsTabH = 520.0f;
 
 /// Altura do painel de objetos para a aba principal e o estado do formulário.
@@ -71,8 +77,7 @@ inline float objPanelHeight(int mainTab, int addTab, bool box, bool model, bool 
         (void)addTab;
         return form > kAddOtherTabsH ? form : kAddOtherTabsH;
     }
-    if (mainTab == 2) return kScenesTabH;
-    return kJointsTabH;
+    return kJointsTabH;   // V22: a aba 2 é Juntas (Cenas virou painel próprio)
 }
 
 } // namespace viewer::panel

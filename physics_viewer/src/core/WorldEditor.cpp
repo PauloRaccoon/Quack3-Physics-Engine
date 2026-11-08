@@ -27,6 +27,7 @@ WorldParams captureWorld(const PhysicsWorld& world) {
     p.warmStarting = s.warmStarting;
     p.sleepEnabled = world.sleepSettings().enabled;
     p.sleepTime = world.sleepSettings().timeToSleep;
+    p.orientationExponential = world.integratorSettings().orientation == OrientationIntegration::Exponential;
     return p;
 }
 
@@ -75,6 +76,10 @@ bool setSleepTime(PhysicsWorld& world, Real seconds) {
     return true;
 }
 
+void setOrientationExponential(PhysicsWorld& world, bool exponential) {
+    world.integratorSettings().orientation = exponential ? OrientationIntegration::Exponential : OrientationIntegration::Euler;
+}
+
 void applyWorld(PhysicsWorld& world, const WorldParams& p) {
     if (!world.getGravity().nearlyEqual(p.gravity, Real(1e-9))) setWorldGravity(world, p.gravity);
     setWorldFixedStep(world, p.fixedDt);
@@ -85,6 +90,7 @@ void applyWorld(PhysicsWorld& world, const WorldParams& p) {
     setWarmStarting(world, p.warmStarting);
     setSleepEnabled(world, p.sleepEnabled);
     setSleepTime(world, p.sleepTime);
+    setOrientationExponential(world, p.orientationExponential);
 }
 
 const std::vector<DebugFlagInfo>& debugFlagTable() {

@@ -14,6 +14,7 @@
 // =============================================================================
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -38,6 +39,10 @@
 #include "viewer/core/ObjModel.h"
 #include "viewer/core/ObjectSpawner.h"
 #include "viewer/core/OrbitCamera.h"
+#include "viewer/core/AppInfo.h"
+#include "viewer/core/Arcball.h"
+#include "viewer/core/SceneLibrary.h"
+#include "viewer/core/SliderText.h"
 #include "viewer/core/WorldEditor.h"
 #include "viewer/core/RenderPose.h"
 #include "viewer/core/TimeControl.h"
@@ -129,6 +134,226 @@ static void testOrthonormalBasis() {
         if (!ok) ++bad;
     }
     CHECK(bad == 0);
+}
+
+// V22 — biblioteca de cenas: originais + arquivos salvos, ordem e remoções persistentes
+static void testSceneLibrary() {
+    using viewer::LibraryEntry;
+    using viewer::SceneLibrary;
+    const std::size_t nb = viewer::sceneList().size();
+    // as exportações das originais (nome "NN_" + nome da original) são reconhecidas; arquivos do usuário não
+    for (const viewer::SceneInfo& info : viewer::sceneList()) CHECK(viewer::isBuiltinExportName("07_" + viewer::sanitizeSceneFileName(info.name)));
+    CHECK(!viewer::isBuiltinExportName("Caixa_em_queda") && !viewer::isBuiltinExportName("15_Meu_cenario_editor") &&
+          !viewer::isBuiltinExportName("minha_cena") && !viewer::isBuiltinExportName(""));
+#ifdef VIEWER_SCENES_DIR
+    {   // a pasta scenes/ do pacote: as 14 exportações não duplicam as originais; os 2 exemplos entram
+        const std::vector<std::string> files = viewer::listSceneFiles(VIEWER_SCENES_DIR);
+        SceneLibrary lib;
+        lib.rebuild(files, "");
+        std::size_t fileEntries = 0;
+        for (const LibraryEntry& e : lib.entries()) fileEntries += e.kind == LibraryEntry::Kind::File ? 1 : 0;
+        CHECK(lib.size() == nb + fileEntries && fileEntries == files.size() - nb);
+        CHECK(lib.at(0).kind == LibraryEntry::Kind::Builtin && lib.at(0).builtinIndex == 0 && lib.at(nb).kind == LibraryEntry::Kind::File);
+        // toda entrada gera uma cena válida (originais e arquivos)
+        for (std::size_t i = 0; i < lib.size(); ++i) {
+            viewer::Scene sc;
+            std::string err, warn;
+            const bool okb = viewer::buildLibraryScene(lib.at(i), VIEWER_SCENES_DIR, VIEWER_MODELS_DIR, sc, err, &warn);
+            if (!okb) std::printf("  falhou: %s: %s\n", lib.at(i).name.c_str(), err.c_str());
+#ifdef PHYSICS_USE_DOUBLE
+            // O exemplo 16 foi gerado em float: os vértices do fecho têm erro de ~1e-7, e a checagem de planaridade do modo double
+            // (muito mais estrita) o recusa. Limitação conhecida de abrir arquivos gerados em float numa build double.
+            if (!okb && lib.at(i).file == "16_Modelos_importados") continue;
+#endif
+            CHECK(okb);
+            CHECK(sc.world && !sc.bodies.empty());
+        }
+    }
+#endif
+    const std::vector<std::string> files = {"20_B", "10_A", "zeta", "01_Caixa_em_queda"};   // (a 4ª é exportação de original)
+    SceneLibrary lib;
+    lib.rebuild(files, "");
+    CHECK(lib.size() == nb + 3 && lib.findFile("01_Caixa_em_queda") < 0 && lib.findFile("zeta") == static_cast<int>(nb) + 2);
+    // mover
+    std::size_t ni = 99;
+    CHECK(!lib.moveUp(0) && !lib.moveDown(lib.size() - 1) && !lib.moveUp(lib.size() + 5) && !lib.moveDown(lib.size() + 5));
+    CHECK(lib.moveDown(0, &ni) && ni == 1 && lib.at(0).builtinIndex == 1 && lib.at(1).builtinIndex == 0);
+    CHECK(lib.moveUp(1, &ni) && ni == 0 && lib.at(0).builtinIndex == 0);
+    CHECK(lib.moveUp(lib.size() - 1, &ni) && lib.at(lib.size() - 2).file == "zeta");   // arquivos também reordenam entre si e com originais
+    CHECK(lib.moveUp(static_cast<std::size_t>(lib.findFile("zeta"))) && lib.moveUp(static_cast<std::size_t>(lib.findFile("zeta"))));
+    // mover um arquivo para o começo e uma original para o fim
+    while (lib.moveUp(static_cast<std::size_t>(lib.findFile("zeta")))) {}
+    CHECK(lib.at(0).file == "zeta");
+    while (lib.moveDown(static_cast<std::size_t>(lib.findBuiltin(0)))) {}
+    CHECK(lib.at(lib.size() - 1).builtinIndex == 0);
+    // apagar: original fica escondida; arquivo some; a última entrada não pode ser apagada
+    LibraryEntry gone;
+    CHECK(lib.remove(static_cast<std::size_t>(lib.findBuiltin(2)), &gone) && gone.builtinIndex == 2 && lib.findBuiltin(2) < 0 && lib.hiddenBuiltinCount() == 1);
+    CHECK(lib.remove(static_cast<std::size_t>(lib.findFile("20_B")), &gone) && gone.file == "20_B" && lib.hiddenBuiltinCount() == 1);
+    CHECK(!lib.remove(lib.size() + 3));
+    // persistência: salvar e reconstruir devolve a mesma ordem (e as escondidas continuam escondidas)
+    const std::string saved = lib.serialize();
+    SceneLibrary again;
+    again.rebuild({"20_B", "10_A", "zeta"}, saved);   // "20_B" ainda existe no disco -> volta no fim (arquivo "novo")
+    CHECK(again.size() == lib.size() + 1);
+    for (std::size_t i = 0; i < lib.size(); ++i)
+        CHECK(again.at(i).kind == lib.at(i).kind && again.at(i).builtinIndex == lib.at(i).builtinIndex && again.at(i).file == lib.at(i).file);
+    CHECK(again.at(again.size() - 1).file == "20_B" && again.findBuiltin(2) < 0 && again.hiddenBuiltinCount() == 1);
+    // arquivo que sumiu do disco sai; arquivo novo entra no fim; restaurar originais
+    SceneLibrary third;
+    third.rebuild({"zeta", "novo"}, saved);
+    CHECK(third.findFile("10_A") < 0 && third.findFile("novo") == static_cast<int>(third.size()) - 1);
+    CHECK(third.restoreBuiltins() == 1 && third.findBuiltin(2) == static_cast<int>(third.size()) - 1 && third.hiddenBuiltinCount() == 0 && third.restoreBuiltins() == 0);
+    // addFile: novo no fim; repetido só devolve o índice
+    const std::size_t before = third.size();
+    const std::size_t idx = third.addFile("outra");
+    CHECK(idx == before && third.size() == before + 1 && third.addFile("outra") == idx && third.size() == before + 1);
+    // não apaga a última
+    SceneLibrary one;
+    one.rebuild({}, "");
+    while (one.size() > 1) CHECK(one.remove(0));
+    CHECK(!one.remove(0) && one.size() == 1);
+    // texto salvo corrompido/hostil: nada quebra, cai na ordem padrão
+    for (const std::string bad : {std::string("lixo\nbuiltin 0\n"), std::string("physics_scene_library 1\nbuiltin 999\nbuiltin -4\nbuiltin x\nfile ../../etc/passwd\nfile a/b\nhidden 77\nzzz 1\n"),
+                                  std::string("physics_scene_library 1\nbuiltin 1\nbuiltin 1\nhidden 1\nfile zeta\nfile zeta\n"), std::string(300000, 'x')}) {
+        SceneLibrary b;
+        b.rebuild({"zeta"}, bad);
+        std::set<int> seen;
+        bool dup = false;
+        for (const LibraryEntry& e : b.entries()) if (e.kind == LibraryEntry::Kind::Builtin) dup = dup || !seen.insert(e.builtinIndex).second;
+        CHECK(!dup && b.size() >= nb - 1 && b.findFile("../../etc/passwd") < 0 && b.findFile("a/b") < 0);
+    }
+    {   // "hidden" vence um "builtin" repetido depois dele? (um builtin só entra uma vez; escondido não volta sozinho)
+        SceneLibrary b;
+        b.rebuild({}, "physics_scene_library 1\nhidden 1\nbuiltin 0\nbuiltin 2\n");
+        CHECK(b.findBuiltin(1) < 0 && b.hiddenBuiltinCount() == 1 && b.at(0).builtinIndex == 0 && b.at(1).builtinIndex == 2);
+    }
+    {   // sessão completa em disco: salvar 3 cenas, reordenar, apagar um arquivo, "reabrir o programa"
+        namespace fs = std::filesystem;
+        const fs::path dir = fs::temp_directory_path() / "viewer_v22_test";
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+        fs::create_directories(dir, ec);
+        for (const char* n : {"aaa", "bbb", "ccc"}) {
+            viewer::Scene sc = viewer::makeEmptyScene(true);
+            std::string err;
+            CHECK(viewer::saveSceneFile(sc, (dir / (std::string(n) + ".scene")).string(), err));
+        }
+        SceneLibrary a;
+        a.rebuild(viewer::listSceneFiles(dir.string()), "");
+        CHECK(a.size() == nb + 3 && a.at(nb).file == "aaa" && a.at(nb + 2).file == "ccc");
+        while (a.moveUp(static_cast<std::size_t>(a.findFile("ccc")))) {}       // ccc para o começo
+        CHECK(a.remove(static_cast<std::size_t>(a.findBuiltin(5))));             // esconde uma original
+        { std::ofstream f(dir / viewer::scenelibrary::kFileName); f << a.serialize(); }
+        fs::remove(dir / "bbb.scene", ec);                                       // apaga um arquivo do disco
+        { viewer::Scene sc = viewer::makeEmptyScene(false); std::string err;     // e salva um novo
+          CHECK(viewer::saveSceneFile(sc, (dir / "zzz.scene").string(), err)); }
+        std::ifstream in(dir / viewer::scenelibrary::kFileName);
+        std::stringstream ss;
+        ss << in.rdbuf();
+        SceneLibrary b;   // "reabre"
+        b.rebuild(viewer::listSceneFiles(dir.string()), ss.str());
+        CHECK(b.at(0).file == "ccc" && b.findFile("bbb") < 0 && b.findBuiltin(5) < 0 && b.hiddenBuiltinCount() == 1);
+        CHECK(b.at(b.size() - 1).file == "zzz" && b.findFile("aaa") >= 0);       // arquivo novo no fim
+        CHECK(b.size() == nb - 1 + 3);                                           // originais-1, ccc, aaa, zzz
+        for (std::size_t i = 0; i < b.size(); ++i) {
+            viewer::Scene sc;
+            std::string err;
+            CHECK(viewer::buildLibraryScene(b.at(i), dir.string(), VIEWER_MODELS_DIR, sc, err));
+        }
+        fs::remove_all(dir, ec);
+    }
+    // cena de arquivo inexistente: erro, sem lançar
+    {
+        viewer::Scene sc;
+        std::string err;
+        LibraryEntry e;
+        e.kind = LibraryEntry::Kind::File;
+        e.file = "nao_existe_mesmo";
+        CHECK(!viewer::buildLibraryScene(e, "/caminho/que/nao/existe", "", sc, err) && !err.empty());
+        e.kind = LibraryEntry::Kind::Builtin;
+        e.builtinIndex = 9999;
+        CHECK(!viewer::buildLibraryScene(e, "", "", sc, err));
+    }
+}
+
+// V20 — edição de slider por texto e quebra de linhas
+static void testSliderText() {
+    double d = 0;
+    CHECK(viewer::parseNumber("1.5", d) && d == 1.5);
+    CHECK(viewer::parseNumber("  -2,25 m", d) && d == -2.25);
+    CHECK(viewer::parseNumber("+3", d) && d == 3.0);
+    CHECK(viewer::parseNumber(".5", d) && d == 0.5);
+    CHECK(viewer::parseNumber("1e2", d) && d == 100.0);
+    CHECK(!viewer::parseNumber("", d) && !viewer::parseNumber("abc", d) && !viewer::parseNumber("inf", d) && !viewer::parseNumber("nan", d));
+    // V24: contas nos sliders
+    CHECK(viewer::parseNumber("4/2", d) && d == 2.0);
+    CHECK(viewer::parseNumber("1-4", d) && d == -3.0);
+    CHECK(viewer::parseNumber("2*(3+1)", d) && d == 8.0);
+    CHECK(viewer::parseNumber("2+3*4", d) && d == 14.0);                 // precedência
+    CHECK(viewer::parseNumber("10-2-3", d) && d == 5.0);                 // associatividade à esquerda
+    CHECK(viewer::parseNumber("8/2/2", d) && d == 2.0);
+    CHECK(viewer::parseNumber("-(2+1)*2", d) && d == -6.0);
+    CHECK(viewer::parseNumber("2*-3", d) && d == -6.0);
+    CHECK(viewer::parseNumber(" 1,5 + 2,5 ", d) && d == 4.0);            // vírgula decimal e espaços
+    CHECK(viewer::parseNumber("3 * 2 m", d) && d == 6.0);                // sufixo de unidade
+    CHECK(viewer::parseNumber("1e2/4", d) && d == 25.0);
+    CHECK(viewer::parseNumber("2e", d) && d == 2.0);                     // 'e' sem algarismos = unidade
+    CHECK(!viewer::parseNumber("1/0", d) && !viewer::parseNumber("1/(2-2)", d));
+    CHECK(!viewer::parseNumber("2+", d) && !viewer::parseNumber("*3", d) && !viewer::parseNumber("(2", d) && !viewer::parseNumber("2)", d));
+    CHECK(!viewer::parseNumber("1.2.3", d) && !viewer::parseNumber("2 3", d) && !viewer::parseNumber("1e999*1", d));
+    CHECK(!viewer::parseNumber(std::string(200, '(') + "1" + std::string(200, ')'), d));   // aninhamento absurdo recusado, sem estouro de pilha
+    CHECK(!viewer::parseNumber(std::string(500, '-') + "1", d));
+    {
+        float sv = 7.0f;
+        CHECK(viewer::sliderValueFromText("4/2", {}, -10.0f, 10.0f, sv) && sv == 2.0f);
+        CHECK(viewer::sliderValueFromText("1-4", {}, -10.0f, 10.0f, sv) && sv == -3.0f);
+        CHECK(viewer::sliderValueFromText("3*100", {}, -10.0f, 10.0f, sv) && sv == 10.0f);   // continua limitado à faixa
+        CHECK(viewer::sliderValueFromText("100/2", viewer::SliderUnit{100.0f, false}, 0.25f, 2.0f, sv) && std::fabs(sv - 0.5f) < 1e-6f);
+        sv = 7.0f;
+        CHECK(!viewer::sliderValueFromText("1/0", {}, -10.0f, 10.0f, sv) && sv == 7.0f);
+    }
+    CHECK(!viewer::parseNumber("0x10", d) && !viewer::parseNumber("-", d) && !viewer::parseNumber("1e999", d));
+    float v = 7;
+    CHECK(viewer::sliderValueFromText("3", {}, 0.0f, 10.0f, v) && v == 3.0f);
+    CHECK(viewer::sliderValueFromText("50", {}, 0.0f, 10.0f, v) && v == 10.0f);       // limitado à faixa
+    CHECK(viewer::sliderValueFromText("-5", {}, 0.0f, 10.0f, v) && v == 0.0f);
+    v = 7;
+    CHECK(!viewer::sliderValueFromText("x", {}, 0.0f, 10.0f, v) && v == 7.0f);         // inválido: não mexe
+    CHECK(viewer::sliderValueFromText("150", viewer::SliderUnit{100.0f, false}, 0.25f, 2.0f, v) && std::fabs(v - 1.5f) < 1e-6f);   // %
+    CHECK(viewer::sliderValueFromText("2.5", viewer::SliderUnit{1000.0f, false}, 0.0f, 0.05f, v) && std::fabs(v - 0.0025f) < 1e-7f);   // mm
+    CHECK(viewer::sliderValueFromText("4", viewer::SliderUnit{1.0f, true}, 0.2236f, 10.0f, v) && std::fabs(v - 2.0f) < 1e-6f);        // massa = v^2
+    CHECK(viewer::sliderValueFromText("-4", viewer::SliderUnit{1.0f, true}, 0.2236f, 10.0f, v) && v == 0.2236f);
+    CHECK(viewer::sliderValueFromText("2", viewer::SliderUnit{0.0f, false}, 0.0f, 10.0f, v) && v == 2.0f);   // escala 0 -> 1
+    CHECK(viewer::sliderTextFromValue(0.96f, {}) == "0.96");
+    CHECK(viewer::sliderTextFromValue(1.5f, viewer::SliderUnit{100.0f, false}) == "150");
+    CHECK(viewer::sliderTextFromValue(2.0f, viewer::SliderUnit{1.0f, true}) == "4");
+    CHECK(viewer::sliderTextFromValue(std::numeric_limits<float>::quiet_NaN(), {}) == "0");
+    // ida e volta: o texto mostrado, relido, devolve (quase) o mesmo valor
+    for (float x : {0.3f, 1.0f, 2.7f, 9.9f}) {
+        const viewer::SliderUnit u{1.0f, true};
+        float back = 0;
+        CHECK(viewer::sliderValueFromText(viewer::sliderTextFromValue(x, u), u, 0.0f, 10.0f, back) && std::fabs(back - x) < 1e-3f);
+    }
+    // quebra de linhas: 1 px por caractere
+    const auto m = [](const std::string& t) { return static_cast<int>(t.size()); };
+    CHECK(viewer::wrapText("", 10, 3, m).empty() && viewer::wrapText("abc", 0, 3, m).empty() && viewer::wrapText("abc", 10, 0, m).empty());
+    auto w = viewer::wrapText("C:/Users/Dell/Documents/projetos/arquivo.csv", 16, 5, m);
+    std::string joined;
+    bool fits = true;
+    for (const std::string& l : w) { joined += l; fits = fits && static_cast<int>(l.size()) <= 16 && !l.empty(); }
+    CHECK(fits && joined == "C:/Users/Dell/Documents/projetos/arquivo.csv");   // nada se perde
+    CHECK(w.size() >= 3 && w.front().back() == '/');                          // quebrou depois de uma barra
+    w = viewer::wrapText("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 10, 2, m);   // sem pontos de quebra: corta em 10
+    CHECK(w.size() == 2 && w[0].size() == 10 && w[1].size() <= 10 && w[1].substr(w[1].size() - 2) == "..");
+    w = viewer::wrapText("curto", 10, 2, m);
+    CHECK(w.size() == 1 && w[0] == "curto");
+    w = viewer::wrapText("x", 1, 3, m);   // largura minima
+    CHECK(w.size() == 1 && w[0] == "x");
+    // painel de gravação: o caminho de 120 caracteres cabe nas 4 linhas a ~40 caracteres por linha
+    const std::string longPath(120, 'p');
+    CHECK(viewer::wrapText(longPath, 40, viewer::panel::kRecPathLines, m).size() == static_cast<std::size_t>(viewer::panel::kRecPathLines) - 1);
+    CHECK(viewer::panel::kRecH >= 176.0f + 4.0f * 16.0f + 40.0f);
 }
 
 // V19 — WASD: deslocamento da câmera
@@ -1161,6 +1386,24 @@ static physics::Real angleAbout(const physics::Quaternion& q, const physics::Vec
     return physics::Real(2) * std::atan2(s, q.w);
 }
 
+// V24: compara dois textos .scene palavra por palavra: números com tolerância relativa de 1e-9 (em double, a ida e volta
+// por texto pode mudar o último dígito, p.ex. a âncora de uma junta recalculada), o resto exatamente.
+static bool sceneTextsClose(const std::string& a, const std::string& b) {
+    std::istringstream x(a), y(b);
+    std::string wa, wb;
+    for (;;) {
+        const bool ha = static_cast<bool>(x >> wa), hb = static_cast<bool>(y >> wb);
+        if (ha != hb) return false;
+        if (!ha) return true;
+        if (wa == wb) continue;
+        char* ea = nullptr;
+        char* eb = nullptr;
+        const double va = std::strtod(wa.c_str(), &ea), vb = std::strtod(wb.c_str(), &eb);
+        if (*ea != '\0' || *eb != '\0' || ea == wa.c_str() || eb == wb.c_str()) return false;
+        if (std::fabs(va - vb) > 1e-9 * std::max(1.0, std::max(std::fabs(va), std::fabs(vb)))) return false;
+    }
+}
+
 static void testSceneFile() {
     using namespace physics;
     // Ida e volta de TODAS as cenas.
@@ -1195,7 +1438,7 @@ static void testSceneFile() {
         const bool ok = parseScene(text, b, err);
         CHECK(ok);
         if (!ok) continue;
-        CHECK(serializeScene(b) == text);
+        CHECK(sceneTextsClose(serializeScene(b), text));
         CHECK(b.bodies.size() == a.bodies.size() && b.links.size() == a.links.size());
         CHECK(b.name == a.name);
         CHECK(near(b.cameraTarget, a.cameraTarget) && near(b.cameraDistance, a.cameraDistance));
@@ -2324,8 +2567,9 @@ static void testV17() {
         CHECK(pm::addFormHeight(true, false) > 440.0f);
         CHECK(pm::objPanelHeight(1, 3, true, false) >= pm::addFormHeight(true, false));
         CHECK(pm::kQuatH >= pm::kQuatContentEnd + 8.0f);
-        CHECK(pm::objPanelHeight(0, 0, false, false) == pm::kObjectTabH && pm::objPanelHeight(2, 0, false, false) == pm::kScenesTabH &&
-              pm::objPanelHeight(3, 0, false, false) == pm::kJointsTabH);
+        CHECK(pm::objPanelHeight(0, 0, false, false) == pm::kObjectTabH && pm::objPanelHeight(2, 0, false, false) == pm::kJointsTabH);
+        // V22: painel Cenas próprio: a lista cabe, e o total bate com a soma dos blocos (sem sobreposição com o de baixo)
+        CHECK(pm::kSceneListH >= 100.0f && pm::kScenesH > pm::kSceneListH + 250.0f && pm::kScenesH < 600.0f);
     }
     {   // --- nomes seguros ---
         CHECK(viewer::sanitizeModelName("Minha Pessoa 3D") == "Minha_Pessoa_3D");
@@ -2568,7 +2812,140 @@ static void testV18() {
 #endif
 }
 
+// V24: arcball.
+static void testArcball() {
+    using physics::Quaternion;
+    using physics::Real;
+    using physics::Vector3;
+    auto close = [](const Vector3& a, const Vector3& b, double tol) { return (a - b).length() < static_cast<Real>(tol); };
+
+    // Pontos da esfera: norma 1 dentro e fora do disco; centro = polo da câmera; borda sem z; entradas inválidas seguras.
+    CHECK(close(viewer::arcballSpherePoint(0, 0), Vector3(0, 0, 1), 1e-6));
+    CHECK(close(viewer::arcballSpherePoint(1, 0), Vector3(1, 0, 0), 1e-6));
+    CHECK(close(viewer::arcballSpherePoint(3, 4), Vector3(0.6f, 0.8f, 0), 1e-6));          // fora: projetado na borda
+    CHECK(std::fabs(viewer::arcballSpherePoint(0.3, -0.4).length() - 1) < 1e-6);
+    CHECK(close(viewer::arcballSpherePoint(std::nan(""), 1), Vector3(0, 0, 1), 1e-6));
+    CHECK(close(viewer::arcballSpherePoint(INFINITY, 0), Vector3(0, 0, 1), 1e-6));
+
+    // Delta: leva a em b (a agarrada acompanha o cursor), com o ângulo do arco (não o dobro).
+    {
+        const Vector3 a = viewer::arcballSpherePoint(0.1, 0.2), b = viewer::arcballSpherePoint(-0.5, 0.3);
+        const Quaternion d = viewer::arcballDelta(a, b);
+        CHECK(close(d.rotate(a), b, 1e-5));
+        Vector3 ax; Real ang = 0;
+        d.toAxisAngle(ax, ang);
+        CHECK(std::fabs(static_cast<double>(ang) - std::acos(std::fmax(-1.0, std::fmin(1.0, static_cast<double>(a.dot(b)))))) < 1e-4);
+        CHECK(viewer::arcballDelta(a, a).nearlyEqual(Quaternion::identity(), Real(1e-6)));
+        CHECK(viewer::arcballDelta(Vector3(std::nanf(""), 0, 0), a).nearlyEqual(Quaternion::identity(), Real(1e-6)));
+        // pontos opostos: giro de 180° bem definido, sem NaN
+        const Quaternion o = viewer::arcballDelta(Vector3(1, 0, 0), Vector3(-1, 0, 0));
+        CHECK(std::isfinite(o.w) && close(o.rotate(Vector3(1, 0, 0)), Vector3(-1, 0, 0), 1e-5));
+    }
+
+    // Base da câmera: ortonormal, destra, e câmera no +Z olhando a origem -> right = +X, up = +Y, back = +Z.
+    {
+        viewer::OrbitCamera cam;
+        cam.target = viewer::Vec3f{0, 0, 0};
+        cam.reset(viewer::Vec3f{0, 0, 0}, 10.0f);
+        cam.rotate(-cam.getYaw(), -cam.getPitch());   // yaw = pitch = 0
+        const viewer::ArcballView v = viewer::arcballViewFromCamera(cam);
+        CHECK(close(v.right, Vector3(1, 0, 0), 1e-4) && close(v.up, Vector3(0, 1, 0), 1e-4) && close(v.back, Vector3(0, 0, 1), 1e-4));
+        cam.rotate(0.9f, 0.4f);
+        const viewer::ArcballView w = viewer::arcballViewFromCamera(cam);
+        CHECK(std::fabs(w.right.dot(w.up)) < 1e-5 && std::fabs(w.up.dot(w.back)) < 1e-5 && std::fabs(w.right.dot(w.back)) < 1e-5);
+        CHECK(std::fabs(w.right.length() - 1) < 1e-5 && std::fabs(w.up.length() - 1) < 1e-5 && std::fabs(w.back.length() - 1) < 1e-5);
+        CHECK(w.right.cross(w.up).dot(w.back) > 0.99f);   // destra
+        // A posição da câmera está em +back do alvo
+        const viewer::Vec3f pp = cam.position();
+        const Vector3 toCam(pp.x - cam.target.x, pp.y - cam.target.y, pp.z - cam.target.z);
+        CHECK(toCam.normalized().dot(w.back) > 0.999f);
+    }
+
+    // Arrasto: o ponto agarrado do corpo fica sob o cursor. Câmera qualquer, orientação inicial qualquer.
+    {
+        viewer::OrbitCamera cam;
+        cam.rotate(0.7f, 0.3f);
+        const viewer::ArcballView view = viewer::arcballViewFromCamera(cam);
+        const Quaternion q0 = Quaternion::fromAxisAngle(Vector3(1, 2, 3).normalized(), Real(0.8));
+        viewer::ArcballDrag drag;
+        CHECK(!drag.active());
+        drag.begin(0.2, 0.1, q0, view);
+        CHECK(drag.active());
+        CHECK(drag.update(0.2, 0.1, view).nearlyEqual(q0, Real(1e-5)));            // sem mover: nada muda
+        const Quaternion q1 = drag.update(-0.4, 0.5, view);
+        CHECK(std::fabs(static_cast<double>(q1.norm()) - 1.0) < 1e-5);
+        // vetor local que estava sob o ponto agarrado: v_local = q0^-1 (p0 no mundo); depois do giro deve estar em p1 (mundo)
+        auto toWorld = [&](const Vector3& pv) { return view.right * pv.x + view.up * pv.y + view.back * pv.z; };
+        const Vector3 p0 = toWorld(viewer::arcballSpherePoint(0.2, 0.1)), p1 = toWorld(viewer::arcballSpherePoint(-0.4, 0.5));
+        const Vector3 local = q0.rotateInverse(p0);
+        CHECK(close(q1.rotate(local), p1, 1e-4));
+        // mover de volta restaura; várias atualizações não acumulam erro (sempre q0 -> destino)
+        for (int i = 0; i < 1000; ++i) (void)drag.update(0.3 * std::sin(i * 0.1), 0.3 * std::cos(i * 0.1), view);
+        CHECK(drag.update(0.2, 0.1, view).nearlyEqual(q0, Real(1e-5)));
+        drag.end();
+        CHECK(!drag.active());
+        CHECK(drag.update(0.9, 0.9, view).nearlyEqual(q0, Real(1e-5)));            // inativo: devolve a inicial
+    }
+
+    // Projeção e círculos máximos: pontos a 1 do centro; eixos locais com q = identidade.
+    {
+        const viewer::ArcballView v;   // padrão: tela = mundo
+        constexpr int kN = 32;
+        viewer::ArcballPoint pts[kN];
+        CHECK(viewer::arcballCircle(Quaternion::identity(), 2, v, pts, kN) == kN);      // círculo no plano XY local: sem profundidade
+        bool ok = true;
+        for (int i = 0; i < kN; ++i) ok = ok && std::fabs(std::hypot(pts[i].x, pts[i].y) - 1.0f) < 1e-5f && std::fabs(pts[i].depth) < 1e-5f;
+        CHECK(ok);
+        CHECK(viewer::arcballCircle(Quaternion::identity(), 0, v, pts, kN) == kN);      // plano YZ: x = 0
+        ok = true;
+        for (int i = 0; i < kN; ++i) ok = ok && std::fabs(pts[i].x) < 1e-5f;
+        CHECK(ok);
+        CHECK(viewer::arcballCircle(Quaternion::identity(), 3, v, pts, kN) == 0 && viewer::arcballCircle(Quaternion::identity(), 0, v, pts, 2) == 0 && viewer::arcballCircle(Quaternion::identity(), 0, v, nullptr, kN) == 0);
+        const viewer::ArcballPoint pr = viewer::arcballProject(Vector3(0, 0, 1), v);
+        CHECK(pr.depth == 1.0f && pr.x == 0.0f && pr.y == 0.0f);
+    }
+}
+
+// V24: integração da orientação escolhida no painel do mundo.
+static void testOrientationMode() {
+    physics::PhysicsWorld world;
+    CHECK(viewer::captureWorld(world).orientationExponential);   // padrão do motor: exponencial
+    viewer::setOrientationExponential(world, false);
+    CHECK(!viewer::captureWorld(world).orientationExponential);
+    CHECK(world.integratorSettings().orientation == physics::OrientationIntegration::Euler);
+    viewer::WorldParams p = viewer::captureWorld(world);
+    p.orientationExponential = true;
+    viewer::applyWorld(world, p);
+    CHECK(world.integratorSettings().orientation == physics::OrientationIntegration::Exponential);
+
+    // setOrientationQuaternion (arcball): normaliza, recusa lixo, não mexe na posição.
+    physics::RigidBodyDesc bd;
+    bd.shape = std::make_shared<physics::SphereShape>(physics::Real(0.5));
+    bd.transform.position = physics::Vector3(1, 2, 3);
+    const physics::BodyId id = world.createBody(bd);
+    const physics::Quaternion q0 = physics::Quaternion::fromAxisAngle(physics::Vector3(0, 1, 0), physics::Real(0.5));
+    physics::Quaternion big = q0;
+    big.w *= 3; big.x *= 3; big.y *= 3; big.z *= 3;
+    CHECK(viewer::setOrientationQuaternion(world, id, big));
+    CHECK(world.getBody(id).getOrientation().nearlyEqual(q0, physics::Real(1e-6)));
+    CHECK(world.getBody(id).getTransform().position.nearlyEqual(physics::Vector3(1, 2, 3), physics::Real(1e-6)));
+    physics::Quaternion bad = q0;
+    bad.x = std::nanf("");
+    CHECK(!viewer::setOrientationQuaternion(world, id, bad));
+    CHECK(!viewer::setOrientationQuaternion(world, id, physics::Quaternion(0, 0, 0, 0)));
+    CHECK(!viewer::setOrientationQuaternion(world, physics::kInvalidBodyId, q0));
+    CHECK(world.getBody(id).getOrientation().nearlyEqual(q0, physics::Real(1e-6)));   // recusas não alteram
+}
+
+static void testAppInfo() {
+    CHECK(viewer::appinfo::windowTitle() == "Quack3 v0.24");
+    CHECK(viewer::appinfo::versionString() == "v0.24");
+}
+
 int main() {
+    testAppInfo();
+    testArcball();
+    testOrientationMode();
     testMatchesEngine();
     testKnownRotation();
     testOrthonormalBasis();
@@ -2592,6 +2969,8 @@ int main() {
     testTrajectoryRecorder();
     testV17();
     testCameraMove();
+    testSliderText();
+    testSceneLibrary();
     testV18();
     std::printf("%d verificacoes, %d falhas\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

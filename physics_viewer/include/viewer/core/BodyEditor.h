@@ -57,6 +57,10 @@ bool setPosition(physics::PhysicsWorld& world, physics::BodyId id, const physics
 bool setOrientationAxisAngle(physics::PhysicsWorld& world, physics::BodyId id, const physics::Vector3& axis,
                              physics::Real angle);
 
+/// V24: define a orientação por um quatérnio qualquer (normalizado aqui). Não finito ou norma ~0: ignora (false).
+/// A posição não muda; usado pelo arcball.
+bool setOrientationQuaternion(physics::PhysicsWorld& world, physics::BodyId id, const physics::Quaternion& q);
+
 /// Orientação = identidade (quatérnio 1, 0, 0, 0).
 bool resetOrientation(physics::PhysicsWorld& world, physics::BodyId id);
 

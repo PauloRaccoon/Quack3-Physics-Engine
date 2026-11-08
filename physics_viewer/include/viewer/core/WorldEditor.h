@@ -27,6 +27,7 @@ struct WorldParams {
     bool warmStarting = true;
     bool sleepEnabled = true;
     physics::Real sleepTime = physics::Real(0.5);
+    bool orientationExponential = true;   ///< V24: orientação por exp(½ Δt ω) q (true) ou Euler q + ½ Δt (0,ω) q (false)
 };
 
 namespace worldlimits {
@@ -55,6 +56,8 @@ void setWarmStarting(physics::PhysicsWorld& world, bool on);
 /// Liga/desliga o sleeping. Desligar acorda todos os corpos.
 void setSleepEnabled(physics::PhysicsWorld& world, bool on);
 bool setSleepTime(physics::PhysicsWorld& world, physics::Real seconds);
+/// V24: integração da orientação: exponencial de quatérnio (true, exata para ω constante) ou Euler (false).
+void setOrientationExponential(physics::PhysicsWorld& world, bool exponential);
 
 // --- Desenho de depuração ---------------------------------------------------------------------------
 struct DebugFlagInfo {

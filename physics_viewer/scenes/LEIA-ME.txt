@@ -2,6 +2,6 @@ Pasta de cenas do physics_viewer (arquivos .scene, texto legivel).
 
 - Os arquivos 01..14 sao as cenas embutidas (o 15 e um exemplo montado com o editor de cena da V14; o 16 usa modelos 3D importados e precisa da pasta models/), gravadas por `scene_export` (sem raylib):
       scene_export physics_viewer/scenes
-- A aba "Cenas" do painel da direita salva aqui o estado atual da cena e carrega qualquer arquivo desta pasta.
+- O painel "Cenas" (topo da coluna da direita) salva aqui o estado atual da cena. Os arquivos 15, 16 e os que voce salvar entram na lista de cenas (as setas os percorrem); os 01..14 sao copias das originais e nao entram. A ordem e as originais apagadas ficam em biblioteca.txt (gerado pelo programa).
 - Voce pode editar os arquivos a mao (formato descrito em include/viewer/core/SceneFile.h):
   quaternios em `orientation` sao w x y z; corpos sao numerados 1, 2, 3... na ordem do arquivo.
