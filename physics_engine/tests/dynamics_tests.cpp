@@ -266,10 +266,11 @@ static void testRotationAndGyroscopic() {
     bd.angularVelocity = Vector3(0.1f, 6.0f, 0.1f);
     bd.angularDamping = 0;
 
-    auto run = [&](int hz, bool gyro, Real seconds, Real& maxEDev, Real& maxLDev, Real& bodyWChange) {
+    auto run = [&](int hz, bool gyro, Real seconds, Real& maxEDev, Real& maxLDev, Real& bodyWChange, GyroscopicMethod method = GyroscopicMethod::Accurate) {
         RigidBody b(bd);
         IntegratorSettings cfg;
         cfg.gyroscopicTerm = gyro;
+        cfg.gyroMethod = method;
         const Real dt = Real(1) / Real(hz);
         const Real e0 = b.getKineticEnergy();
         const Real l0 = b.getAngularMomentum().length();
@@ -287,15 +288,21 @@ static void testRotationAndGyroscopic() {
         CHECK(nearlyEqual(b.getOrientation().norm(), Real(1), kTol));
     };
 
-    Real e60, l60, c60, e240, l240, c240, eOff, lOff, cOff;
+    Real e60, l60, c60, e240, l240, c240, eOff, lOff, cOff, eImp, lImp, cImp, eImp4, lImp4, cImp4;
     run(60, true, 3, e60, l60, c60);
     run(240, true, 3, e240, l240, c240);
     run(60, false, 3, eOff, lOff, cOff);
-    std::printf("  [info] giroscopico 3s: 60Hz dE=%.4f dL=%.4f | 240Hz dE=%.4f dL=%.4f\n",
-                double(e60), double(l60), double(e240), double(l240));
-    CHECK(e60 < Real(0.25) && l60 < Real(0.15));       // limitado mesmo a 60 Hz
-    CHECK(e240 < e60 && l240 < l60);                   // converge ao refinar Δt
-    CHECK(e240 < Real(0.06) && l240 < Real(0.03));
+    run(60, true, 3, eImp, lImp, cImp, GyroscopicMethod::Implicit);
+    run(240, true, 3, eImp4, lImp4, cImp4, GyroscopicMethod::Implicit);
+    std::printf("  [info] giroscopico 3s: preciso 60Hz dE=%.5f dL=%.5f | implicito 60Hz dE=%.4f dL=%.4f | implicito 240Hz dE=%.4f dL=%.4f\n",
+                double(e60), double(l60), double(eImp), double(lImp), double(eImp4), double(lImp4));
+    // V25: o giroscópio preciso (RK4 + rotação real do passo) conserva E e |L| ~1000x melhor que o implícito, a 60 Hz.
+    CHECK(e60 < Real(2e-3) && l60 < Real(2e-3));
+    CHECK(e240 < Real(2e-3) && l240 < Real(2e-3));
+    // O método implícito legado continua disponível: limitado e convergente ao refinar Δt (O(Δt)).
+    CHECK(eImp < Real(0.25) && lImp < Real(0.15));
+    CHECK(eImp4 < eImp && lImp4 < lImp);
+    CHECK(e60 < eImp * Real(0.05) && l60 < lImp * Real(0.05));
     // Precessão: com o termo, ω no referencial do corpo evolui (Euler);
     // sem ele, ω fica congelado — um estado estacionário fisicamente impossível.
     CHECK(c60 > Real(1) && c240 > Real(1));

@@ -101,9 +101,19 @@ struct BodyState {
 
 /// Move a POSE do corpo (não a velocidade): translada o centro de massa por `dx` e gira pelo
 /// vetor de rotação `dtheta` (ângulos pequenos). Corpos não dinâmicos não se movem.
+///
+/// V25: o MOMENTO ANGULAR L = I_mundo ω é conservado (ω ← I_mundo,novo⁻¹ L): a correção de posição não cria nem tira
+/// momento, como já era com o linear. Girar só a pose deixando ω no lugar mudaria L de verdade, e num rotor rápido
+/// (giroscópio, pião) cada correção de junta "tombaria" o eixo: o giroscópio ligado a um pivô caía em ~1,5 s a 60 Hz.
+/// Corpos parados (L = 0) não são afetados.
 inline void movePose(RigidBody& b, const Vector3& dx, const Vector3& dtheta) {
     if (!b.isDynamic()) return;
+    const Vector3 L = (dtheta.lengthSquared() > Real(0)) ? b.getAngularMomentum() : Vector3::zero();
     b.setPose(b.getWorldCenterOfMass() + dx, b.getOrientation().integrated(dtheta, Real(1)));
+    if (L.lengthSquared() > Real(0)) {
+        const Vector3 w = b.getInvInertiaWorld() * L;
+        if (w.isFinite()) b.setAngularVelocity(w);
+    }
 }
 
 /// Massa efetiva de uma linha com direção linear `n` aplicada nos braços rA, rB.

@@ -78,7 +78,7 @@ constexpr Real kAABBDisplacementMultiplier = Real(2); ///< Antecipação do movi
 
 constexpr Real kGravity         = Real(9.81);         ///< Aceleração da gravidade [m/s²]
 constexpr Real kMaxLinearSpeed  = Real(200);          ///< Limite de velocidade linear [m/s]
-constexpr Real kMaxAngularSpeed = Real(100);          ///< Limite de velocidade angular [rad/s]
+constexpr Real kMaxAngularSpeed = Real(200);          ///< Limite de velocidade angular [rad/s] (V25: 100 -> 200, para piões e giroscópios rápidos)
 
 /// Dimensões de forma suportadas [m] (raio da esfera, semi-extents da caixa). Abaixo do mínimo
 /// a área das faces underflowa/degenera; acima do máximo, volume e inércia estouram em float.

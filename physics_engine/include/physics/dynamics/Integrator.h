@@ -26,7 +26,17 @@ enum class OrientationIntegration {
     Exponential   ///< q ← exp(½ Δt ω) q: exata para ω constante (padrão)
 };
 
+/// Como o termo giroscópico ω × Iω é integrado (V25).
+enum class GyroscopicMethod {
+    Implicit,   ///< um passo de Newton implícito (Catto): estável, mas amortece a nutação e erra a fase da precessão (1ª ordem)
+    Accurate    ///< RK4 com subpassos das equações de Euler no referencial do corpo + rotação real do passo (padrão): quase conserva E e L
+};
+
 struct IntegratorSettings {
+    GyroscopicMethod gyroMethod = GyroscopicMethod::Accurate;
+    /// V25: divisão de Strang (½ rotação livre antes do solver, ½ depois): erro O(Δt²) no acoplamento rotor-junta/contato
+    /// em vez de O(Δt). Só vale com gyroMethod = Accurate. false = rotação livre inteira antes do solver (modo anterior).
+    bool gyroStrangSplitting = true;
     OrientationIntegration orientation = OrientationIntegration::Exponential;
     Real maxLinearSpeed = kMaxLinearSpeed;    ///< limite de |v| [m/s]
     Real maxAngularSpeed = kMaxAngularSpeed;  ///< limite de |ω| [rad/s]
@@ -58,6 +68,18 @@ struct Integrator {
     /// Nova velocidade angular (mundo) após o passo giroscópico implícito.
     /// Exposta para testes.
     static Vector3 applyGyroscopicTerm(const RigidBody& body, const Vector3& angularVelocity, Real dt);
+
+    /// V25: integra as equações de Euler  I ω̇ = (Iω) × ω  no referencial do corpo (RK4, subpassos de ≤ ~0,1 rad) a partir
+    /// de `angularVelocity` (mundo, antes do giroscópico) e devolve a ω do mundo no FIM do passo (na orientação prevista
+    /// do fim). `correction` = ω média equivalente do passo − ω final (ambas no mundo): somada à ω final, gira o corpo
+    /// exatamente como a dinâmica livre. Falha segura (devolve false e não usa os valores) se algo não for finito ou
+    /// |ω|Δt passar de ~3 rad (o chamador usa o método implícito).
+    static bool integrateGyroscopicAccurate(const RigidBody& body, const Vector3& angularVelocity, Real dt, Vector3& wEnd,
+                                            Vector3& correction);
+
+    /// Mesma coisa para uma orientação inicial `q0` e um tensor (no corpo) dados: usada pelas duas metades do passo.
+    static bool integrateGyroscopicAccurate(const Quaternion& q0, const Matrix3& inertia, const Matrix3& invInertia,
+                                            const Vector3& angularVelocity, Real dt, Vector3& wEnd, Vector3& correction);
 };
 
 } // namespace physics

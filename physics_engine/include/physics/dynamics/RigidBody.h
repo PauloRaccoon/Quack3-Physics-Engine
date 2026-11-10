@@ -183,6 +183,21 @@ public:
     }
     void clearStepVelocityDelta() { stepDeltaV_ = Vector3::zero(); stepDeltaW_ = Vector3::zero(); }
 
+    /// V25: correção giroscópica da orientação. O integrador giroscópico "preciso" calcula a rotação REAL do passo
+    /// (ω varia dentro dele); esta é (ω média equivalente) − (ω no fim do passo), no mundo. integratePositions gira
+    /// a orientação com ω + correção e a zera; fora do integrador fica 0 (nada muda).
+    const Vector3& getGyroCorrection() const { return gyroCorrection_; }
+    void setGyroCorrection(const Vector3& c) { gyroCorrection_ = c.isFinite() ? c : Vector3::zero(); }
+
+    /// V25: divisão de Strang do giroscópio. integrateVelocities faz a 1ª metade (Δt/2) da rotação livre ANTES do
+    /// solver e guarda aqui a ω média dessa metade (no mundo); integratePositions gira o corpo por ela e faz a 2ª metade
+    /// DEPOIS do solver (com as impulsos já aplicados). Sem isto o erro de divisão é O(Δt) e um rotor rápido ligado a uma
+    /// junta (giroscópio, pião) tomba. Fora do integrador não há metade pendente.
+    bool hasGyroHalf() const { return gyroHalfValid_; }
+    const Vector3& getGyroHalfOmega() const { return gyroHalf_; }
+    void setGyroHalf(const Vector3& avgOmega) { gyroHalf_ = avgOmega; gyroHalfValid_ = avgOmega.isFinite(); if (!gyroHalfValid_) gyroHalf_ = Vector3::zero(); }
+    void clearGyroHalf() { gyroHalf_ = Vector3::zero(); gyroHalfValid_ = false; }
+
     const Vector3& getForce() const { return force_; }
     const Vector3& getTorque() const { return torque_; }
     void clearForces() { force_ = Vector3::zero(); torque_ = Vector3::zero(); }
@@ -259,6 +274,9 @@ private:
     Vector3 torque_;
     Vector3 stepDeltaV_;         ///< variação de velocidade linear do último integrateVelocities
     Vector3 stepDeltaW_;         ///< idem angular
+    Vector3 gyroCorrection_;     ///< ver getGyroCorrection()
+    Vector3 gyroHalf_;           ///< ver getGyroHalfOmega()
+    bool gyroHalfValid_ = false;
     Transform transform_;        ///< frame do corpo (derivado)
     MassData massData_;
     std::shared_ptr<const Shape> shape_;
