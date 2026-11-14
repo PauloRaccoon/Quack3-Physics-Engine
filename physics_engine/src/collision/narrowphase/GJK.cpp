@@ -105,7 +105,7 @@ Vector3 closestOnTriangle(Simplex& s, Real* lam) {
             seg.v[0] = pts[pr[0]];
             seg.v[1] = pts[pr[1]];
             seg.size = 2;
-            Real sl[2];
+            Real sl[2] = {Real(1), Real(0)};
             const Vector3 q = closestOnSegment(seg, sl);
             const Real sq = q.lengthSquared();
             if (sq < bestSq) {
