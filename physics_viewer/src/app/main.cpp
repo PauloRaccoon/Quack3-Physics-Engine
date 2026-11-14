@@ -128,14 +128,14 @@ constexpr Color kAccent{255, 176, 80, 255};    // valores do quatérnio
 constexpr Color kWarn{255, 112, 112, 255};     // avisos (|q| != 1, gimbal lock)
 constexpr Color kBlueInk{130, 185, 255, 255};
 constexpr Color kDockBg{32, 34, 41, 255};      // fundo das colunas laterais
-constexpr Color kSurface{68, 73, 86, 255};     // fundo dos painéis (v0.23.1: trocado com o dos controles)
+constexpr Color kSurface{68, 73, 86, 255};     // fundo dos painéis
 
 /// V23: estilo do raygui (todos os controles) — cinza-grafite com destaque azul. Chamado uma vez após InitWindow.
 void applyTheme() {
     const auto set = [](int prop, Color c) { GuiSetStyle(DEFAULT, prop, ColorToInt(c)); };
     set(BACKGROUND_COLOR, kSurface);
     set(LINE_COLOR, Color{78, 83, 97, 255});
-    set(BASE_COLOR_NORMAL, Color{47, 50, 59, 255});   // v0.23.1: botões, sliders e cabeçalhos (eram o tom claro; fundo e controles trocaram)
+    set(BASE_COLOR_NORMAL, Color{47, 50, 59, 255});   // botões, sliders e cabeçalhos
     set(BORDER_COLOR_NORMAL, Color{96, 102, 118, 255});
     set(TEXT_COLOR_NORMAL, kInk);
     set(BASE_COLOR_FOCUSED, Color{60, 65, 78, 255});
@@ -559,7 +559,7 @@ int main(int argc, char** argv) {
     }
 
     SetConfigFlags(FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE);
-    InitWindow(kScreenW, kScreenH, viewer::appinfo::windowTitle().c_str());   // V23: "Quack3 v0.23"
+    InitWindow(kScreenW, kScreenH, viewer::appinfo::windowTitle().c_str());   // "Quack3 v1.0.0"
     SetWindowMinSize(1100, 700);   // duas colunas de 340 + cena de 320 + bordas; abaixo disso as colunas encolhem
     int fpsApplied = 120;
     float fpsSlider = 120.0f;
@@ -703,6 +703,8 @@ int main(int argc, char** argv) {
     float spAxis[3] = {0.0f, 1.0f, 0.0f}, spAngDeg = 0.0f, spQ[4] = {1.0f, 0.0f, 0.0f, 0.0f};
     physics::BodyId lastSelected = physics::kInvalidBodyId;
     float oAxisX = 0.0f, oAxisY = 1.0f, oAxisZ = 0.0f, oAngleDeg = 0.0f;
+    int oMode = 0;                                   // V25: 0 = eixo-angulo, 1 = angulos omega x/y/z (graus)
+    float oWx = 0.0f, oWy = 0.0f, oWz = 0.0f;       // V25: ωx ωy ωz [graus] em torno dos eixos fixos do mundo (X, depois Y, depois Z)
 
     // Pose de RENDER de um corpo: interpola os dois últimos passos físicos com o α atual, no modo escolhido.
     auto renderPose = [&](physics::BodyId id) {
@@ -725,13 +727,14 @@ int main(int argc, char** argv) {
             kindIdx = viewer::kSpawnKindCount;
             modelToggle = true;
             importMsg = "importado: " + got[0].file + (got.size() > 1 ? " (+" + std::to_string(got.size() - 1) + ")" : "") +
-                        (msgs.empty() ? "" : "  AVISO: " + msgs[0]);
+                        "  [.mtl: " + std::to_string(got[0].mtlCount) + ", texturas: " + std::to_string(got[0].textureCount) + "]";
+            for (const std::string& m : msgs) importMsg += "  | " + m;   // V25: todos os avisos (antes só o 1o, e cortado)
             importMsgErr = false;
         } else {
             importMsg = msgs.empty() ? "ERRO: nada importado" : msgs[0];
             importMsgErr = true;
         }
-        importMsgFrames = 900;
+        importMsgFrames = 1800;
     };
 
     // Troca a cena atual por `next` (cena carregada de arquivo ou nova): mesmo reinício de uma troca de cena.
@@ -1637,6 +1640,8 @@ int main(int argc, char** argv) {
                 const viewer::AxisAngleF aa0 = viewer::toAxisAngle(scene.world->getBody(selected).getOrientation());
                 oAxisX = aa0.axis.x; oAxisY = aa0.axis.y; oAxisZ = aa0.axis.z;
                 oAngleDeg = aa0.angle * 57.29578f;
+                const physics::Vector3 w0 = viewer::anglesXYZFromQuaternion(scene.world->getBody(selected).getOrientation());
+                oWx = static_cast<float>(w0.x) * 57.29578f; oWy = static_cast<float>(w0.y) * 57.29578f; oWz = static_cast<float>(w0.z) * 57.29578f;
             }
             if (addFailFrames > 0) --addFailFrames;
             GuiPanel(objPanel, addFailFrames > 0 ? "Objetos - NAO foi possivel criar"
@@ -1711,7 +1716,7 @@ int main(int argc, char** argv) {
                             }
                             if (importMsgFrames > 0) {
                                 --importMsgFrames;
-                                panelText(importMsg.c_str(), static_cast<int>(ox), static_cast<int>(oy) + 45, 14, importMsgErr ? kWarn : kBlueInk);
+                                wrapPanelText(importMsg, static_cast<int>(ox), static_cast<int>(oy) + 45, 14, importMsgErr ? kWarn : kBlueInk, 3);
                             } else {
                                 panelText("copiado para models/ (com .mtl e texturas)", static_cast<int>(ox), static_cast<int>(oy) + 45, 14, kInkDim);
                             }
@@ -2008,7 +2013,16 @@ int main(int argc, char** argv) {
                 if (chW) viewer::setAngularVelocity(world, selected, physics::Vector3(ww[0], ww[1], ww[2]));
                 oy += 2.0f;
                 if (fitButton(Rectangle{ox, oy, ow, 28.0f}, "Zerar velocidades")) viewer::zeroVelocities(world, selected);
-            } else {   // Orientação: eixo + ângulo -> quatérnio
+            } else {   // Orientação: eixo + ângulo -> quatérnio, ou três ângulos ωx ωy ωz (V25)
+                const int oModePrev = oMode;
+                fitToggleGroup(Rectangle{ox, oy, ow / 2.0f, 26.0f}, "Eixo-angulo;Omega x y z", &oMode);
+                oy += 32.0f;
+                const auto readAngles = [&]() {   // ωx ωy ωz a partir da orientação atual do corpo
+                    const physics::Vector3 w1 = viewer::anglesXYZFromQuaternion(body.getOrientation());
+                    oWx = static_cast<float>(w1.x) * 57.29578f; oWy = static_cast<float>(w1.y) * 57.29578f; oWz = static_cast<float>(w1.z) * 57.29578f;
+                };
+                if (oMode == 1 && oModePrev == 0) readAngles();
+                if (oMode == 0) {
                 sliderRow("eixo x", oAxisX, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisX)));
                 sliderRow("eixo y", oAxisY, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisY)));
                 sliderRow("eixo z", oAxisZ, -1.0f, 1.0f, TextFormat("%+.2f", static_cast<double>(oAxisZ)));
@@ -2020,6 +2034,26 @@ int main(int argc, char** argv) {
                 if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) viewer::resetOrientation(world, selected);
                 oy += 34.0f;
                 panelText("q = (cos(a/2), sen(a/2) * eixo unitario)", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+                } else {
+                    // ωx ωy ωz: aplica na hora (arrastar o slider gira o corpo) — gira ωx em torno de X, depois ωy em Y, depois ωz em Z
+                    bool chA = false;
+                    chA |= sliderRow("omega x", oWx, -180.0f, 180.0f, TextFormat("%+.0f gr", static_cast<double>(oWx)));
+                    chA |= sliderRow("omega y", oWy, -90.0f, 90.0f, TextFormat("%+.0f gr", static_cast<double>(oWy)));
+                    chA |= sliderRow("omega z", oWz, -180.0f, 180.0f, TextFormat("%+.0f gr", static_cast<double>(oWz)));
+                    if (chA)
+                        viewer::setOrientationAnglesXYZ(world, selected, static_cast<Real>(oWx * 0.017453292519943295f),
+                                                        static_cast<Real>(oWy * 0.017453292519943295f), static_cast<Real>(oWz * 0.017453292519943295f));
+                    oy += 2.0f;
+                    if (fitButton(Rectangle{ox, oy, ow / 2.0f - 4.0f, 28.0f}, "Ler do corpo")) readAngles();
+                    if (fitButton(Rectangle{ox + ow / 2.0f + 4.0f, oy, ow / 2.0f - 4.0f, 28.0f}, "Identidade")) {
+                        viewer::resetOrientation(world, selected);
+                        oWx = oWy = oWz = 0.0f;
+                    }
+                    oy += 34.0f;
+                    panelText("gira omega x (eixo X), depois y, depois z", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+                    oy += 16.0f;
+                    panelText("eixos fixos do mundo; q = qz * qy * qx", static_cast<int>(ox), static_cast<int>(oy), 14, kInkDim);
+                }
             }
             }
             if (mainTab == 0)   // V14: permite clicar no cenário estático (chão, paredes) para editá-lo

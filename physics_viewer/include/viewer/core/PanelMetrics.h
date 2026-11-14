@@ -30,7 +30,7 @@ constexpr float kKindRowStep = 28.0f;        ///< cada linha de botões de forma
 constexpr int kKindRows = 3;
 constexpr float kModelRowStep = 32.0f;       ///< V18: linha "Atualizar lista" (só com modelo 3D escolhido)
 constexpr float kListStep = 84.0f;           ///< lista de modelos (80 + 4)
-constexpr float kImportStep = 62.0f;         ///< V17: dica de importar + campo de caminho + botão
+constexpr float kImportStep = 96.0f;         ///< V17: dica de importar + campo de caminho + botão (V25: mensagem de até 3 linhas)
 constexpr float kModelInfoStep = 54.0f;      ///< três linhas de resumo do modelo
 constexpr float kColliderStep = 58.0f;       ///< V17: escolha do colisor (botões + uma linha de explicação)
 constexpr float kSliderStep = 26.0f;
@@ -60,7 +60,7 @@ inline float addFormHeight(bool box, bool model, bool axisShape = false, bool tu
 
 /// Altura mínima das outras abas do painel de objetos (Posicao, Orient, Veloc: cabem em bem menos).
 constexpr float kAddOtherTabsH = 440.0f;
-constexpr float kObjectTabH = 336.0f;
+constexpr float kObjectTabH = 366.0f;   // V25: +30 pela chave "Eixo-angulo / Omega x y z" da aba Orient
 /// V22: painel Cenas (próprio, no topo da coluna direita): título 32 + rótulo 18 + nome 32 + salvar 36 + novas 36 + título da
 /// lista 18 + lista + 6 + subir/descer 34 + apagar/restaurar 34 + carregar 34 + 2 linhas de aviso 34 + margem 10.
 constexpr float kSceneListH = 150.0f;

@@ -61,6 +61,17 @@ bool setOrientationAxisAngle(physics::PhysicsWorld& world, physics::BodyId id, c
 /// A posição não muda; usado pelo arcball.
 bool setOrientationQuaternion(physics::PhysicsWorld& world, physics::BodyId id, const physics::Quaternion& q);
 
+/// V25: ângulos de rotação em torno dos eixos FIXOS do mundo, aplicados nesta ordem: ωx em torno de X, depois ωy em torno
+/// de Y, depois ωz em torno de Z (q = qz(ωz) · qy(ωy) · qx(ωx)); em radianos. Mais intuitivo que eixo-ângulo/quatérnio.
+physics::Quaternion quaternionFromAnglesXYZ(physics::Real wx, physics::Real wy, physics::Real wz);
+
+/// Inversa: ângulos (ωx, ωy, ωz) [rad] com ωx, ωz em (−π, π] e ωy em [−π/2, π/2]. Em ωy = ±π/2 (gimbal lock) ωx = 0 e o
+/// restante vai em ωz. quaternionFromAnglesXYZ(anglesXYZFromQuaternion(q)) == q (a menos do sinal).
+physics::Vector3 anglesXYZFromQuaternion(const physics::Quaternion& q);
+
+/// Aplica a orientação dada por três ângulos [rad] (ver acima). false se algum não for finito ou o corpo não for editável.
+bool setOrientationAnglesXYZ(physics::PhysicsWorld& world, physics::BodyId id, physics::Real wx, physics::Real wy, physics::Real wz);
+
 /// Orientação = identidade (quatérnio 1, 0, 0, 0).
 bool resetOrientation(physics::PhysicsWorld& world, physics::BodyId id);
 

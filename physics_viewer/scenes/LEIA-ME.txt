@@ -1,7 +1,51 @@
-Pasta de cenas do physics_viewer (arquivos .scene, texto legivel).
+PASTA DE CENAS DO QUACK3 VIEWER (physics_viewer)
+================================================
 
-- Os arquivos 01..14 sao as cenas embutidas (o 15 e um exemplo montado com o editor de cena da V14; o 16 usa modelos 3D importados e precisa da pasta models/), gravadas por `scene_export` (sem raylib):
-      scene_export physics_viewer/scenes
-- O painel "Cenas" (topo da coluna da direita) salva aqui o estado atual da cena. Os arquivos 15, 16 e os que voce salvar entram na lista de cenas (as setas os percorrem); os 01..14 sao copias das originais e nao entram. A ordem e as originais apagadas ficam em biblioteca.txt (gerado pelo programa).
-- Voce pode editar os arquivos a mao (formato descrito em include/viewer/core/SceneFile.h):
-  quaternios em `orientation` sao w x y z; corpos sao numerados 1, 2, 3... na ordem do arquivo.
+Aqui ficam as cenas em arquivos .scene (texto legivel, editavel a mao).
+O guia completo do viewer esta em ../README.md.
+
+ARQUIVOS DESTA PASTA
+
+- 01..14   As 14 cenas embutidas no programa, gravadas pela ferramenta scene_export (sem raylib):
+               scene_export physics_viewer/scenes
+           Servem de exemplo para copiar e editar. Nao aparecem duplicadas na lista de cenas.
+- 15       Exemplo montado com o editor de cena (rampa, muro, bola e uma pa presa ao mundo por
+           dobradica de eixo Z).
+- 16       Exemplo com modelos 3D importados (cubos com textura, esfera listrada e um toro). Precisa
+           da pasta models/.
+- *.scene  As cenas que voce salvar pelo painel "Cenas" (topo da coluna da direita).
+- biblioteca.txt     Gerado pelo programa: a ordem das cenas e as originais apagadas.
+- viewer_layout.ini  Gerado pelo programa: larguras e colunas recolhidas dos paineis.
+- exports/           Gerado pelo programa: trajetorias gravadas em CSV (trajetoria_<cena>_<n>.csv).
+
+LISTA DE CENAS
+
+Os arquivos 15, 16 e os que voce salvar entram na lista junto com as 14 originais. As setas, os botoes
+< > e as teclas 1..9 percorrem a lista na ordem em que ela esta. No painel "Cenas" voce pode salvar,
+carregar, reordenar (Subir/Descer), apagar (com confirmacao) e restaurar as originais.
+Apagar uma cena salva apaga o arquivo do disco.
+
+FORMATO
+
+Arquivo de texto; "#" comeca um comentario. Corpos sao numerados 1, 2, 3... na ordem do arquivo.
+Quaternios em "orientation" sao escritos w x y z. Exemplo minimo:
+
+    physics_scene 1
+    name Minha cena
+    gravity 0 -9.81 0
+    body
+      type static
+      shape box 10 0.5 10
+      position 0 -0.5 0
+    end
+    body
+      type dynamic
+      shape sphere 0.5
+      mass 1
+      position 0 3 0
+      orientation 1 0 0 0
+    end
+
+A descricao completa do formato esta no cabecalho de include/viewer/core/SceneFile.h e na secao
+"Formato de cena" do README do viewer. Um arquivo invalido mostra a mensagem com o numero da linha e nao
+altera a cena atual.

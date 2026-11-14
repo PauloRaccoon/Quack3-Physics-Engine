@@ -1386,7 +1386,7 @@ static physics::Real angleAbout(const physics::Quaternion& q, const physics::Vec
     return physics::Real(2) * std::atan2(s, q.w);
 }
 
-// V24: compara dois textos .scene palavra por palavra: números com tolerância relativa de 1e-9 (em double, a ida e volta
+// V24: compara dois textos .scene palavra por palavra: números com tolerância relativa de 1e-9 (double) ou 2e-5 (float) (a ida e volta
 // por texto pode mudar o último dígito, p.ex. a âncora de uma junta recalculada), o resto exatamente.
 static bool sceneTextsClose(const std::string& a, const std::string& b) {
     std::istringstream x(a), y(b);
@@ -1400,7 +1400,7 @@ static bool sceneTextsClose(const std::string& a, const std::string& b) {
         char* eb = nullptr;
         const double va = std::strtod(wa.c_str(), &ea), vb = std::strtod(wb.c_str(), &eb);
         if (*ea != '\0' || *eb != '\0' || ea == wa.c_str() || eb == wb.c_str()) return false;
-        if (std::fabs(va - vb) > 1e-9 * std::max(1.0, std::max(std::fabs(va), std::fabs(vb)))) return false;
+        if (std::fabs(va - vb) > (sizeof(physics::Real) == 4 ? 2e-5 : 1e-9) * std::max(1.0, std::max(std::fabs(va), std::fabs(vb)))) return false;
     }
 }
 
@@ -2611,9 +2611,86 @@ static void testV17() {
         CHECK(viewer::importModel((src / "Meu Cubo.obj").string(), models, r3, err) && r3.file == "Meu_Cubo_3/Meu_Cubo_3.obj");
         CHECK(slurp(root / "models/Meu_Cubo/Meu_Cubo.obj") == cube);
         // sem .mtl e sem textura: importa com avisos
-        { std::string c2 = cube; c2.replace(c2.find("mat.mtl"), 7, "nao.mtl"); spit(src / "solto.obj", c2); }
+        { std::string c2 = cube; c2.replace(c2.find("mat.mtl"), 7, "nao.mtl"); spit(root / "sozinho" / "solto.obj", c2); }
         viewer::ImportResult r4;
-        CHECK(viewer::importModel((src / "solto.obj").string(), models, r4, err) && r4.copied == 1 && !r4.notes.empty());
+        CHECK(viewer::importModel((root / "sozinho" / "solto.obj").string(), models, r4, err) && r4.copied == 1 && !r4.notes.empty() && r4.mtlCount == 0);
+    }
+    {   // --- V25: .mtl e texturas achados com tolerância (o caso "importei o .obj com o .mtl mas só o .obj foi") ---
+        const std::string models = (root / "models_tol").string();
+        std::string err;
+        auto withLib = [&](const std::string& lib) { std::string c = cube; c.replace(c.find("mtllib mat.mtl"), 14, lib.empty() ? "# sem mtllib" : "mtllib " + lib); return c; };
+        const std::string mtlTex = "newmtl m1\nKd 0.2 0.4 0.6\nmap_Kd cor.png\n";
+        auto loads = [&](const viewer::ImportResult& r, bool wantKd, bool wantTex) {
+            viewer::ModelAsset a;
+            std::string e2, w2;
+            if (!viewer::loadModelAsset(models, r.file, 1.0f, a, e2, &w2) || !a.obj || a.obj->materials.size() != 1) return false;
+            const viewer::ObjMaterial& m = a.obj->materials[0];
+            return m.hasKd == wantKd && (m.diffuseMap.empty() != wantTex);
+        };
+        {   // (a) .mtl renomeado (o .obj cita "Modelo.mtl" mas o arquivo é "modelo (1).mtl", o único da pasta)
+            const fs::path d = root / "tol_a";
+            spit(d / "modelo.obj", withLib("Modelo.mtl"));
+            spit(d / "modelo (1).mtl", mtlTex);
+            spit(d / "cor.png", "PNGFAKE");
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "modelo.obj").string(), models, r, err) && r.mtlCount == 1 && r.textureCount == 1 && r.copied == 3);
+            const std::string o = slurp(root / "models_tol" / "modelo" / "modelo.obj");
+            CHECK(o.find("mtllib modelo (1).mtl") != std::string::npos && o.find("Modelo.mtl") == std::string::npos);
+            CHECK(loads(r, true, true));
+            bool noted = false;
+            for (const std::string& n : r.notes) noted = noted || n.find("o .obj cita") != std::string::npos;
+            CHECK(noted);   // o aviso diz o que foi feito
+        }
+        {   // (b) caminho de outro computador no mtllib: usa só o nome do arquivo
+            const fs::path d = root / "tol_b";
+            spit(d / "janela.obj", withLib("C:\\Users\\fulano\\Desktop\\Janela.mtl"));
+            spit(d / "Janela.mtl", "newmtl m1\nKd 1 0 0\n");
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "janela.obj").string(), models, r, err) && r.mtlCount == 1);
+            CHECK(slurp(root / "models_tol" / "janela" / "janela.obj").find("mtllib Janela.mtl") != std::string::npos);
+            CHECK(loads(r, true, false));
+        }
+        {   // (c) o .obj não tem mtllib, mas há um .mtl com o nome dele
+            const fs::path d = root / "tol_c";
+            spit(d / "cubo.obj", withLib(""));
+            spit(d / "cubo.mtl", "newmtl m1\nKd 0 1 0\n");
+            spit(d / "outro.mtl", "newmtl x\n");   // não é o escolhido: o do mesmo nome vence
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "cubo.obj").string(), models, r, err) && r.mtlCount == 1);
+            CHECK(slurp(root / "models_tol" / "cubo" / "cubo.obj").find("mtllib cubo.mtl") != std::string::npos);
+            CHECK(!fs::exists(root / "models_tol" / "cubo" / "outro.mtl"));
+            CHECK(loads(r, true, false));
+        }
+        {   // (d) maiúsculas diferentes entre o citado e o arquivo
+            const fs::path d = root / "tol_d";
+            spit(d / "caixa.obj", withLib("MAT.MTL"));
+            spit(d / "mat.mtl", "newmtl m1\nKd 0.1 0.1 0.9\n");
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "caixa.obj").string(), models, r, err) && r.mtlCount == 1);
+            CHECK(loads(r, true, false));
+        }
+        {   // (e) textura com caminho de outro computador / em outra pasta: copiada e o .mtl reescrito
+            const fs::path d = root / "tol_e";
+            spit(d / "tex.obj", withLib("mat.mtl"));
+            spit(d / "mat.mtl", "newmtl m1\nKd 1 1 1\nmap_Kd D:\\fotos\\cor.png\n");
+            spit(d / "textures" / "COR.PNG", "PNGFAKE");
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "tex.obj").string(), models, r, err) && r.mtlCount == 1 && r.textureCount == 1);
+            CHECK(slurp(root / "models_tol" / "tex" / "mat.mtl").find("map_Kd COR.PNG") != std::string::npos);
+            CHECK(fs::exists(root / "models_tol" / "tex" / "COR.PNG"));
+            CHECK(loads(r, true, true));
+        }
+        {   // (f) ambíguo (dois .mtl, nenhum com o nome certo): não chuta; avisa
+            const fs::path d = root / "tol_f";
+            spit(d / "peca.obj", withLib("sumiu.mtl"));
+            spit(d / "a.mtl", "newmtl m1\n");
+            spit(d / "b.mtl", "newmtl m1\n");
+            viewer::ImportResult r;
+            CHECK(viewer::importModel((d / "peca.obj").string(), models, r, err) && r.mtlCount == 0 && r.copied == 1);
+            bool warned = false;
+            for (const std::string& n : r.notes) warned = warned || n.find("sumiu.mtl") != std::string::npos;
+            CHECK(warned);
+        }
     }
     {   // --- recusas, sem deixar lixo em models/ ---
         const std::string models = (root / "models2").string();
@@ -2937,14 +3014,71 @@ static void testOrientationMode() {
     CHECK(world.getBody(id).getOrientation().nearlyEqual(q0, physics::Real(1e-6)));   // recusas não alteram
 }
 
+// V25: orientação por três ângulos (ωx, ωy, ωz) em torno dos eixos fixos do mundo.
+static void testAnglesXYZ() {
+    using physics::Quaternion;
+    using physics::Real;
+    using physics::Vector3;
+    constexpr double kPi = 3.14159265358979323846;
+    auto same = [](const Quaternion& a, const Quaternion& b) { return a.nearlyEqual(b, Real(2e-4)) || a.nearlyEqual(Quaternion(-b.w, -b.x, -b.y, -b.z), Real(2e-4)); };
+    // ordem: primeiro X, depois Y, depois Z (eixos do mundo): 90 gr em X leva +Y a +Z; depois 90 gr em Z leva +Z a +Z e +X a +Y
+    {
+        const Quaternion q = viewer::quaternionFromAnglesXYZ(Real(kPi / 2), 0, 0);
+        CHECK((q.rotate(Vector3(0, 1, 0)) - Vector3(0, 0, 1)).length() < Real(1e-5));
+        const Quaternion q2 = viewer::quaternionFromAnglesXYZ(Real(kPi / 2), 0, Real(kPi / 2));
+        CHECK((q2.rotate(Vector3(0, 1, 0)) - Vector3(0, 0, 1)).length() < Real(1e-5));   // +Y -(X 90)-> +Z -(Z 90)-> +Z
+        CHECK((q2.rotate(Vector3(1, 0, 0)) - Vector3(0, 1, 0)).length() < Real(1e-5));   // +X -(X 90)-> +X -(Z 90)-> +Y  (Z depois X daria +Z)
+    }
+    // composição manual: qz · qy · qx
+    {
+        const Real a = Real(0.3), b = Real(-0.7), c = Real(1.9);
+        const Quaternion m = Quaternion::fromAxisAngle(Vector3(0, 0, 1), c) * Quaternion::fromAxisAngle(Vector3(0, 1, 0), b) * Quaternion::fromAxisAngle(Vector3(1, 0, 0), a);
+        CHECK(same(viewer::quaternionFromAnglesXYZ(a, b, c), m));
+    }
+    // ida e volta: ângulos -> q -> ângulos (fora do gimbal lock) e q -> ângulos -> q (todos, incluindo o lock)
+    unsigned s = 12345u;
+    auto rnd = [&]() { s = s * 1664525u + 1013904223u; return static_cast<double>(s >> 8) / static_cast<double>(1u << 24); };
+    bool okAngles = true, okQuat = true;
+    for (int i = 0; i < 2000; ++i) {
+        const double a = (rnd() * 2 - 1) * kPi * 0.999, b = (rnd() * 2 - 1) * kPi * 0.49, c = (rnd() * 2 - 1) * kPi * 0.999;
+        const Quaternion q = viewer::quaternionFromAnglesXYZ(Real(a), Real(b), Real(c));
+        const Vector3 r = viewer::anglesXYZFromQuaternion(q);
+        okAngles = okAngles && std::fabs(r.x - a) < 2e-3 && std::fabs(r.y - b) < 2e-3 && std::fabs(r.z - c) < 2e-3;
+        okQuat = okQuat && same(viewer::quaternionFromAnglesXYZ(r.x, r.y, r.z), q);
+    }
+    CHECK(okAngles);
+    CHECK(okQuat);
+    for (const double b : {kPi / 2, -kPi / 2}) {   // gimbal lock: q reproduzido mesmo assim
+        for (const double a : {0.0, 0.8, -2.0}) {
+            const Quaternion q = viewer::quaternionFromAnglesXYZ(Real(a), Real(b), Real(1.1));
+            const Vector3 r = viewer::anglesXYZFromQuaternion(q);
+            CHECK(std::isfinite(r.x) && std::isfinite(r.y) && std::isfinite(r.z));
+            CHECK(same(viewer::quaternionFromAnglesXYZ(r.x, r.y, r.z), q));
+        }
+    }
+    CHECK(same(viewer::quaternionFromAnglesXYZ(0, 0, 0), Quaternion::identity()));
+    CHECK(viewer::anglesXYZFromQuaternion(Quaternion::identity()).length() < Real(1e-6));
+    // setOrientationAnglesXYZ no mundo
+    physics::PhysicsWorld world;
+    physics::RigidBodyDesc bd;
+    bd.shape = std::make_shared<physics::SphereShape>(physics::Real(0.5));
+    bd.transform.position = Vector3(1, 2, 3);
+    const physics::BodyId id = world.createBody(bd);
+    CHECK(viewer::setOrientationAnglesXYZ(world, id, Real(0.3), Real(-0.7), Real(1.9)));
+    CHECK(same(world.getBody(id).getOrientation(), viewer::quaternionFromAnglesXYZ(Real(0.3), Real(-0.7), Real(1.9))));
+    CHECK(!viewer::setOrientationAnglesXYZ(world, id, std::nanf(""), 0, 0) && !viewer::setOrientationAnglesXYZ(world, physics::kInvalidBodyId, 0, 0, 0));
+    CHECK(world.getBody(id).getTransform().position.nearlyEqual(Vector3(1, 2, 3), Real(1e-6)));
+}
+
 static void testAppInfo() {
-    CHECK(viewer::appinfo::windowTitle() == "Quack3 v0.24");
-    CHECK(viewer::appinfo::versionString() == "v0.24");
+    CHECK(viewer::appinfo::windowTitle() == "Quack3 v1.0.0");
+    CHECK(viewer::appinfo::versionString() == "v1.0.0");
 }
 
 int main() {
     testAppInfo();
     testArcball();
+    testAnglesXYZ();
     testOrientationMode();
     testMatchesEngine();
     testKnownRotation();

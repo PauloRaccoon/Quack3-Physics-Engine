@@ -98,6 +98,35 @@ bool setOrientationAxisAngle(PhysicsWorld& world, BodyId id, const Vector3& axis
     return true;
 }
 
+Quaternion quaternionFromAnglesXYZ(Real wx, Real wy, Real wz) {
+    const Quaternion qx = Quaternion::fromAxisAngle(Vector3(1, 0, 0), wx);
+    const Quaternion qy = Quaternion::fromAxisAngle(Vector3(0, 1, 0), wy);
+    const Quaternion qz = Quaternion::fromAxisAngle(Vector3(0, 0, 1), wz);
+    return (qz * qy * qx).normalized();
+}
+
+Vector3 anglesXYZFromQuaternion(const Quaternion& qIn) {
+    const Quaternion q = qIn.normalized();
+    // R = Rz(c) Ry(b) Rx(a): R20 = −sen b, R21 = cos b sen a, R22 = cos b cos a, R10 = sen c cos b, R00 = cos c cos b
+    const Vector3 c0 = q.rotate(Vector3(1, 0, 0)), c1 = q.rotate(Vector3(0, 1, 0)), c2 = q.rotate(Vector3(0, 0, 1));
+    const double r20 = static_cast<double>(c0.z);
+    const double b = std::asin(std::fmax(-1.0, std::fmin(1.0, -r20)));
+    double a = 0.0, c = 0.0;
+    if (std::fabs(r20) < 1.0 - 1e-9) {
+        a = std::atan2(static_cast<double>(c1.z), static_cast<double>(c2.z));
+        c = std::atan2(static_cast<double>(c0.y), static_cast<double>(c0.x));
+    } else {   // gimbal lock: só a soma/diferença de ωx e ωz importa; fixa ωx = 0
+        a = 0.0;
+        c = std::atan2(-static_cast<double>(c1.x), static_cast<double>(c1.y));
+    }
+    return Vector3(static_cast<Real>(a), static_cast<Real>(b), static_cast<Real>(c));
+}
+
+bool setOrientationAnglesXYZ(PhysicsWorld& world, BodyId id, Real wx, Real wy, Real wz) {
+    if (!std::isfinite(wx) || !std::isfinite(wy) || !std::isfinite(wz)) return false;
+    return setOrientationQuaternion(world, id, quaternionFromAnglesXYZ(wx, wy, wz));
+}
+
 bool setOrientationQuaternion(PhysicsWorld& world, BodyId id, const Quaternion& q) {
     if (!placeable(world, id) || !std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z) || !std::isfinite(q.w) || q.normSquared() < Real(1e-12)) return false;
     Transform xf = world.getBody(id).getTransform();

@@ -1,12 +1,42 @@
-Modelos de exemplo do physics_viewer (V15): .obj + .mtl + textura .png na MESMA pasta.
-- cubo.obj    cubo de 1 m, textura xadrez (a colisao e exata: o fecho de um cubo e o proprio cubo)
-- esfera.obj  icosfera de raio 0,5 m (320 faces), textura listras
-- toro.obj    toro CONCAVO: desenha-se o toro, mas colide como o seu fecho convexo (o buraco e preenchido)
-Voce pode usar qualquer .obj (v, vt, f com v/vt/vn, usemtl, mtllib) e .mtl (newmtl, Kd, map_Kd); veja include/viewer/core/ObjModel.h.
+PASTA DE MODELOS DO QUACK3 VIEWER (physics_viewer)
+==================================================
 
-SEU PROPRIO MODELO (V17): arraste o arquivo .obj (ou uma pasta com .obj) para a JANELA do viewer, ou abra
-Adicionar > Forma > "modelo 3D" e cole o caminho no campo, depois "Importar". O viewer copia o .obj, o .mtl e as
-texturas que ele usa para models/<nome>/ (nada e sobrescrito) e ja seleciona o modelo na lista.
-Tambem funciona copiar a pasta do modelo para ca e apertar "Atualizar lista".
-Tipo de colisao (forma fisica): Fecho (convexo, fiel), Caixa (envolvente) ou Esfera (envolvente).
-Por enquanto so o formato .obj; .fbx/.glb/.stl nao sao lidos (converta para .obj, p. ex. no Blender: File > Export > Wavefront).
+Aqui ficam os modelos 3D que podem ser adicionados as cenas (Adicionar > Forma > "modelo 3D (.obj)").
+O guia completo do viewer esta em ../README.md.
+
+MODELOS DE EXEMPLO (.obj + .mtl + textura .png na MESMA pasta)
+
+- cubo.obj    cubo de 1 m, textura xadrez. A colisao e exata: o fecho convexo de um cubo e o proprio cubo.
+- esfera.obj  icosfera de raio 0,5 m (320 faces), textura listras.
+- toro.obj    toro CONCAVO: desenha-se o toro, mas ele colide como o seu fecho convexo (o buraco e
+              preenchido).
+
+FORMATOS LIDOS
+
+- .obj: v, vt, f (em qualquer forma: v, v/vt, v//vn, v/vt/vn), indices negativos, poligonos, usemtl, mtllib.
+- .mtl: newmtl, Kd, map_Kd.
+- Texturas: .png .jpg .bmp .tga.
+Outros formatos (.fbx, .glb, .stl) nao sao lidos: converta para .obj, por exemplo no Blender
+(File > Export > Wavefront).
+
+IMPORTAR O SEU PROPRIO MODELO
+
+1. Arraste o arquivo .obj (ou uma pasta com .obj) para a JANELA do viewer; ou
+2. Abra Adicionar > Forma > "modelo 3D", cole o caminho completo no campo e aperte "Importar"; ou
+3. Copie a pasta do modelo para esta pasta e aperte "Atualizar lista".
+
+Nos dois primeiros casos o viewer valida o modelo e copia o .obj, os .mtl que ele cita e as texturas que ele
+usa para models/<nome>/. Nada e sobrescrito (se o nome ja existe, vira <nome>_2) e um arquivo invalido nao
+deixa lixo. O modelo importado ja fica selecionado na lista. O .mtl e as texturas sao encontrados mesmo que o
+.obj cite outro nome ou um caminho de outro computador.
+
+FORMA FISICA (COLISOR)
+
+O motor so aceita formas convexas. Escolha o colisor do modelo na janela:
+Fecho (convexo, o mais fiel), Caixa, Esfera, Capsula ou Cilindro. A malha desenhada e sempre o modelo.
+"mostrar o colisor (fio)" desenha a forma fisica por cima da malha.
+
+LIMITES
+
+.obj ate 32 MB, 400 mil vertices e 800 mil triangulos; fecho com ate 4096 vertices e 8192 faces;
+tamanho final do modelo de 0,05 a 40 m.

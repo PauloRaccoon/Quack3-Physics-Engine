@@ -7,7 +7,10 @@
 // O que é copiado (para `models/<nome>/`): o `.obj`, os `.mtl` que ele cita (`mtllib`) e as texturas `map_Kd` desses
 // materiais (só as que o modelo usa). Nada é sobrescrito: se `models/<nome>/` já existe, vira `<nome>_2`, `<nome>_3`...
 // Segurança: caminhos com `..`, absolutos ou com unidade são recusados; só extensões de imagem conhecidas; tamanho
-// máximo por arquivo e número máximo de arquivos. O modelo é lido e validado ANTES de copiar (arquivo inválido não
+// máximo por arquivo e número máximo de arquivos.
+// V25: o .mtl e as texturas são procurados com tolerância (outro nome de arquivo, caminho de outro computador como
+// "C:\\...\\x.mtl", maiúsculas, .obj sem "mtllib"); quando o nome citado não bate com o arquivo achado, o .obj e o .mtl copiados
+// são reescritos para apontar certo, e `notes` conta o que foi feito. O modelo é lido e validado ANTES de copiar (arquivo inválido não
 // deixa lixo na pasta).
 // =============================================================================
 #pragma once
@@ -26,6 +29,8 @@ constexpr int kMaxFolderObjs = 20;                           ///< .obj importado
 struct ImportResult {
     std::string file;                 ///< chave para a lista: "<nome>/<nome>.obj" (relativo à pasta de modelos)
     int copied = 0;                   ///< quantos arquivos foram copiados
+    int mtlCount = 0;                 ///< V25: quantos .mtl foram copiados
+    int textureCount = 0;             ///< V25: quantas texturas foram copiadas
     std::vector<std::string> notes;   ///< avisos (textura ou .mtl ausente, caminho inseguro ignorado...)
 };
 

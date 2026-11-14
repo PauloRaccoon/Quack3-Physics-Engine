@@ -1,86 +1,332 @@
-# physics_viewer
+# Quack3 Viewer — viewer do motor de física
 
-Janela de demonstração do `../physics_engine` (C++17 + [raylib](https://www.raylib.com/)). Fica numa pasta
-**ao lado** do motor, que continua sem nenhuma dependência gráfica.
+Aplicação interativa que mostra o motor Quack3 (`../physics_engine`) em funcionamento (C++17 + [raylib](https://www.raylib.com/)
+e raygui). Ela fica numa pasta **ao lado** do motor, que continua sem nenhuma dependência gráfica.
 
-> Estado: **V15** (importação de modelos 3D com textura: fecho convexo próprio, leitor .obj/.mtl, aba na janela e `.scene` com modelos); **V14** (editor de cena: cena nova, objetos estáticos, juntas; sobre a V13, painéis acoplados nas laterais, com rolagem e largura ajustável; sobre a V12, salvar e carregar cenas; sobre as cenas de colisão e rotação da V11 e o fechamento da V10). Janela redimensionável, painéis de
-> quatérnio, mundo, objeto e adicionar objetos, eventos de contato, e testes sem janela no `ctest`. O roteiro completo
-> está no `README.md` da pasta acima.
+O viewer reúne:
 
-## Compilar e rodar
+- **14 cenas prontas** (empilhamento, pirâmide, pêndulos, correntes, poliedros, colisões, gimbal lock, interpolação...) e cenas suas, salvas em arquivo;
+- **edição ao vivo** do objeto selecionado, do mundo e do solver, com sliders que aceitam digitar valores e contas;
+- **painel do quatérnio** (componentes, norma, eixo-ângulo, Euler, aviso de gimbal lock), esfera de **arcball** e três modos de interpolação de render;
+- **criação de objetos** (caixa, esfera, cápsula, cilindro, poliedros e modelos 3D), **editor de cena** com objetos estáticos e juntas;
+- **importação de modelos `.obj`** com textura;
+- **debug draw** do motor, estatísticas, tempos por fase e indicadores de eventos de contato e de sleeping;
+- **gravação de trajetória em CSV** e **modo apresentação**.
+
+A orientação dos corpos é um quatérnio no motor do começo ao fim. A matriz 4×4 enviada à placa de vídeo é
+calculada por `viewer::toMat4()` a partir do `Quaternion::toMatrix()` **do motor**, então o que aparece na tela é
+exatamente o estado da física.
+
+---
+
+## 1. Compilar e rodar
 
 Requisitos: CMake ≥ 3.14, um compilador C++17 e acesso ao GitHub na primeira configuração (a raylib 5.5 é
 baixada e compilada automaticamente, a menos que já esteja instalada no sistema; o raygui 4.0, um único
-cabeçalho para a interface, é sempre baixado).
+cabeçalho, é sempre baixado).
 
 | Sistema | Pacotes necessários para a raylib |
 |---|---|
 | Linux (Debian/Ubuntu) | `sudo apt install build-essential cmake git libgl1-mesa-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev` |
-| Windows | CMake + Visual Studio Build Tools (MSVC) **ou** MinGW-w64. Nada mais. |
+| Windows | CMake + Visual Studio Build Tools (MSVC) **ou** MinGW-w64 |
 | macOS | `xcode-select --install` e CMake |
 
 ```bash
 cmake -S physics_viewer -B build_viewer
 cmake --build build_viewer -j
-./build_viewer/physics_viewer          # Windows: build_viewer\Release\physics_viewer.exe
+./build_viewer/physics_viewer          # Windows (MSVC): build_viewer\Release\physics_viewer.exe
 ```
 
-Só o núcleo e os testes, sem raylib nem janela:
+O programa precisa das pastas `scenes/` e `models/` do código-fonte: os caminhos são fixados na compilação.
+
+### Opções do CMake
+
+| Opção | Padrão | O que faz |
+|---|---|---|
+| `VIEWER_BUILD_APP` | `ON` | compila a janela (precisa da raylib); `OFF` compila só o núcleo e os testes |
+| `VIEWER_BUILD_TESTS` | `ON` | compila os testes do núcleo (não precisam da raylib) |
+| `VIEWER_TEST_APP` | `OFF` | registra no `ctest` um teste que abre a janela por 5 quadros (precisa de tela e OpenGL) |
+| `PHYSICS_USE_DOUBLE` | `OFF` | motor em `double` (o viewer converte para `float` só ao desenhar) |
+| `PHYSICS_ENGINE_DIR` | `../physics_engine` | caminho do motor, se estiver em outro lugar |
+
+### Só o núcleo e os testes (sem raylib e sem janela)
 
 ```bash
 cmake -S physics_viewer -B build_core -DVIEWER_BUILD_APP=OFF
 cmake --build build_core -j && ctest --test-dir build_core
 ```
 
-`ctest` roda dois testes do núcleo, sem janela: `viewer_tests` (verificações unitárias) e `viewer_smoke` (todas as cenas por
-20 s no mesmo caminho da janela, com poses finitas e quatérnios unitários nos 3 modos de interpolação, mais um *fuzz*
-determinístico: centenas de operações aleatórias de criar, lançar, apagar, editar parâmetros, mudar o mundo e trocar de
-cena). Para também registrar a abertura da janela por 5 quadros (precisa de tela/OpenGL): `-DVIEWER_TEST_APP=ON`.
-
-Para usar `double` no motor: `-DPHYSICS_USE_DOUBLE=ON` (o viewer converte para `float` só ao desenhar).
-
-## Controles
-
-| Entrada | Ação |
-|---|---|
-| botão esquerdo | selecionar o corpo sob o mouse e **arrastá-lo com uma mola** (clicar no vazio ou no chão desmarca) |
-| roda, durante o arrasto | afastar / aproximar o ponto-alvo da mola (profundidade) |
-| botão direito **ou roda pressionada** + mover | girar a câmera ao redor do alvo |
-| roda do mouse | zoom (desligada sobre os painéis) |
-| `F5` / `F6` / `F7` | apresentação (tela limpa + quatérnio grande) / câmera giratória / iniciar-parar gravação CSV |
-| `T` ou botão **Alvo** | alvo da câmera: centro do mundo ⇄ corpo selecionado (transição suave) |
-| `Home` ou botão **Reset cam** | resetar a câmera (ângulos padrão, alvo no centro do mundo, distância inicial da cena) |
-| `B` / `O` | lançar uma caixa / esfera na direção do mouse (18 m/s) |
-| `Delete` ou `X` | apagar o corpo selecionado (juntas ligadas a ele também somem) |
-| coluna da direita, em cima | escolher o modo de interpolação e o FPS de render (slider de 10 a 240) |
-| coluna da direita, embaixo | abas **Objeto** (editar o corpo selecionado: Material, Posicao, Veloc, Orient) e **Adicionar** (criar objetos, ver abaixo) |
-| `←` / `→` | cena anterior / próxima |
-| `1` … `9` | ir direto para a cena |
-| `R` | reiniciar a cena atual (mantém a câmera) |
-| `I` | próximo modo de interpolação (slerp → lerp → Euler) |
-| `Espaço`, `P` ou botão **Pausar/Continuar** | pausar / continuar (selecionar continua funcionando; arrastar só atua com a física rodando) |
-| (ao abrir, trocar ou reiniciar a cena) | **a cena começa pausada**: aperte `Espaço`/**Continuar** para rodar; o `--frames` automático não pausa |
-| `.` ou botão **Passo** | avança **um** passo físico fixo (se estava rodando, pausa primeiro) |
-| botões `1x` `1/2` `1/4` `1/10` | escala de tempo (câmera lenta) |
-| botões `<` `>` e **Reiniciar** | cena anterior / próxima; recriar a cena atual (como `R`) |
-| `M` | mostrar / esconder o painel do mundo (coluna da esquerda, embaixo) |
-| arrastar a **borda** de uma coluna | muda a largura dela (340 px a 45% da janela); a cena 3D ocupa o que sobra |
-| botão `<` / `>` no topo da coluna | recolhe / reabre a coluna (faixa de 28 px) |
-| roda sobre uma coluna, ou arrastar a barra fina à direita dela | rola a coluna (a roda só dá zoom quando o mouse está sobre a cena) |
-| `F11` | tela cheia sem borda (e volta). A janela é redimensionável (mínimo 1100 × 700) |
-| `ESC` | sair |
-
-Verificação automática, sem interação (roda 240 quadros, salva uma captura e sai com código 0):
+### Linha de comando
 
 ```bash
 ./build_viewer/physics_viewer --frames 240 --screenshot saida.png
 ```
 
-## Cenas
+`--frames N` roda N quadros sem pausar a cena e sai com código 0; `--screenshot arquivo.png` salva uma captura
+ao final. Serve para verificação automática.
+
+---
+
+## 2. A janela
+
+A janela é redimensionável (mínimo 1100 × 700; `F11` alterna tela cheia sem borda). A tela tem quatro regiões:
+
+```text
+┌───────────────────────────────────────────────────────────────────────────┐
+│ barra de controle: Pausar/Continuar · Passo · câmera lenta · < > Reiniciar │
+├──────────────┬────────────────────────────────────────┬───────────────────┤
+│ coluna da    │                                        │ coluna da direita │
+│ esquerda     │            cena 3D                     │ Interpolação      │
+│ Quatérnio,   │                                        │ Cenas             │
+│ arcball,     │                                        │ Objeto | Adicionar│
+│ gravação,    │                                        │ | Juntas          │
+│ mundo e debug│                                        │                   │
+└──────────────┴────────────────────────────────────────┴───────────────────┘
+```
+
+- **Colunas fixas** nas laterais, cada uma com **barra de rolagem**: a roda do mouse sobre a coluna ou a barra fina à direita dela rola o conteúdo. Controles cortados pela borda da coluna ficam bloqueados.
+- **Largura ajustável:** arraste a borda da coluna (340 px até 45% da janela; a cena nunca fica com menos de 320 px). O botão `<` / `>` no topo da coluna a recolhe e reabre.
+- **A cena 3D** ocupa o espaço restante, desenhada numa textura do tamanho exato da área (a proporção da câmera acompanha a área e os cliques usam o raio calculado dentro dela). A roda do mouse só dá zoom quando o cursor está sobre a cena.
+- **Layout salvo:** larguras e colunas recolhidas ficam em `scenes/viewer_layout.ini` e voltam na próxima execução. Arquivo inválido é ignorado.
+- **Tema** cinza-grafite com destaque azul. Botões, abas e textos reduzem a fonte para sempre caber na coluna.
+- **Sliders:** além de arrastar, o **clique duplo** troca a barra por um campo de texto (ver seção 4.1).
+- **Cenas começam pausadas** ao abrir, trocar ou reiniciar.
+
+---
+
+## 3. Controles
+
+| Entrada | Ação |
+|---|---|
+| botão esquerdo | selecionar o corpo sob o mouse e **arrastá-lo com uma mola** (clicar no vazio ou no chão desmarca) |
+| roda, durante o arrasto | afasta ou aproxima o ponto-alvo da mola (profundidade) |
+| botão direito **ou** roda pressionada + mover | girar a câmera ao redor do alvo |
+| roda do mouse | zoom (só sobre a cena) |
+| `W` `A` `S` `D` | mover a câmera pelo cenário (frente, esquerda, trás, direita) |
+| `E` / `Q` | subir / descer a câmera |
+| `Shift` | acelera o movimento da câmera (3×) |
+| `T` ou botão **Alvo** | alvo da câmera: centro do mundo ⇄ corpo selecionado (transição suave) |
+| `Home` ou botão **Reset cam** | enquadramento inicial da cena, alvo no centro do mundo |
+| `B` / `O` | lançar uma caixa / esfera na direção do mouse (18 m/s) |
+| `Delete` ou `X` | apagar o corpo selecionado (as juntas ligadas a ele também somem) |
+| `Espaço`, `P` ou botão **Pausar/Continuar** | pausa / continua (selecionar funciona pausado; arrastar só atua com a física rodando) |
+| `.` ou botão **Passo** | avança **um** passo físico fixo (se estava rodando, pausa primeiro) |
+| botões `1x` `1/2` `1/4` `1/10` | escala de tempo (câmera lenta) |
+| `←` / `→` ou botões `<` `>` | cena anterior / próxima |
+| `1` … `9` | ir direto para a cena de mesmo número na lista |
+| `R` ou botão **Reiniciar** | recria a cena atual (mantém a câmera) |
+| `I` | próximo modo de interpolação (slerp → lerp → Euler) |
+| `M` | mostra / esconde o painel do mundo (coluna da esquerda) |
+| `F5` | modo apresentação |
+| `F6` | câmera giratória |
+| `F7` | iniciar / parar a gravação de trajetória |
+| `F11` | tela cheia sem borda |
+| `ESC` | sai da edição de texto; fora dela, sai da apresentação e depois fecha o programa |
+
+Com um campo de texto em edição (nome de cena, caminho de modelo, valor de slider), os atalhos de teclado
+ficam desligados para você digitar à vontade.
+
+**Câmera.** `W/S` movem para a frente e para trás na direção em que a câmera olha (projetada no chão), `A/D` para
+os lados. A velocidade cresce com a distância da câmera ao alvo. Trocar de cena zera o deslocamento.
+
+**Arrastar com mola.** Uma mola amortecida liga o ponto clicado do corpo (guardado no referencial dele) ao ponto
+do raio do mouse na mesma profundidade. A força entra por `applyForceAtPoint`, então puxar por uma quina também
+gera torque e muda o quatérnio. A aceleração é limitada e a mola é ajustada ao passo físico, para não divergir
+em cenas de passo largo.
+
+---
+
+## 4. Painéis
+
+### 4.1 Sliders editáveis
+
+Em qualquer slider (objeto, adicionar, juntas, mundo, solver, FPS de render), um **clique duplo rápido** abre um
+campo de texto já preenchido com o **valor atual** e o cursor no fim.
+
+- Digite um número (vírgula ou ponto decimal, notação científica, unidade no fim, como `2,5 m`) ou uma **conta**: `+ - * /`, parênteses e sinal (`4/2` → 2, `1-4` → −3, `2*(3+1)` → 8).
+- **Enter** ou clique fora aplica; **Esc** cancela sem fechar o programa.
+- O resultado é limitado à faixa do slider. Divisão por zero, sintaxe inválida ou texto que não é número mantêm o valor anterior.
+- Se a coluna rolar ou a aba mudar durante a edição, ela é cancelada.
+
+### 4.2 Barra de controle
+
+- **Pausar/Continuar:** pausado, nada avança. **Passo** executa exatamente um passo fixo e depois desenha com α = 1 (o estado novo, sem mistura com o anterior). O HUD mostra `passo #N`.
+- **Câmera lenta** (1, 1/2, 1/4, 1/10): multiplica o tempo de render antes do acumulador. A física continua em passos fixos, então o resultado é o mesmo, só mais devagar, e a interpolação mantém o movimento suave.
+- **`<` `>` Reiniciar:** troca de cena e recria a cena atual.
+- **Reset cam** e **Alvo:** ver a seção 3.
+
+### 4.3 Coluna da esquerda — quatérnio e arcball
+
+O painel do quatérnio mostra, para o **corpo em foco** (o selecionado, ou o corpo principal da cena), a pose
+que está sendo *desenhada*: componentes `x y z w`, norma `|q|`, eixo-ângulo, ângulos de Euler (yaw, pitch, roll,
+convenção YXZ) e a velocidade angular **w**. Perto de pitch = ±90° o painel avisa **GIMBAL LOCK**: yaw e roll
+passam a girar o mesmo eixo e a conversão perde um grau de liberdade (devolve roll = 0).
+
+O **arcball** é uma esfera com os 3 círculos máximos dos eixos locais do corpo (x vermelho, y verde, z azul; a
+metade de trás é apagada) e, em laranja, o **eixo de rotação do quatérnio**. Com um corpo selecionado, arrastar
+sobre a esfera gira o corpo: o ponto agarrado acompanha o cursor. A velocidade angular é zerada durante o gesto;
+pause a cena para girar com calma.
+
+### 4.4 Coluna da direita — interpolação
+
+Escolhe como a orientação é interpolada entre os dois últimos passos físicos, e o FPS de render (10 a 240):
+
+| Modo | O que faz | O que se vê |
+|---|---|---|
+| **slerp** | interpolação esférica (a do motor) | giro de velocidade constante, `\|q\| = 1` |
+| **lerp sem normalizar** | `(1−t)·q0 + t·q1`, sem renormalizar | `\|q\|` cai no meio do passo (≈ cos(Δ/4)): a matriz sai deformada, o cubo encolhe e o ritmo varia |
+| **Euler** | interpola yaw/pitch/roll e reconverte | caminho torto; atravessando o gimbal lock a pose “pula” |
+
+Com passo de 1/60 s e giro de poucos graus por passo, os três modos são quase idênticos. As cenas 8 e 9 usam passo
+largo exatamente para tornar a diferença visível.
+
+### 4.5 Painel Cenas
+
+Lista única com as 14 cenas originais e os arquivos `.scene` da pasta `scenes/`. As setas, os botões `<` `>` e as
+teclas `1`–`9` percorrem a lista na ordem em que ela está, com volta ao início.
+
+| Controle | O que faz |
+|---|---|
+| **Salvar cena atual** | grava o **estado de agora** em `scenes/<nome>.scene` (poses, quatérnios, velocidades, parâmetros dos corpos, objetos adicionados, juntas, gravidade, Δt, iterações e câmera inicial). Coloca a cena no fim da lista, ou atualiza a que tinha esse nome |
+| **Carregar a escolhida** | vai para a cena marcada (entra pausada; `R` a recria a partir do arquivo) |
+| **Nova (vazia)** / **Nova (so o chao)** | cena do zero, para o editor (seção 4.8) |
+| **Subir / Descer** | reordena a cena escolhida (original ou salva) |
+| **Apagar** | pede um segundo clique (**Confirmar apagar**). Apagar uma salva apaga o `.scene` do disco; apagar uma original só a tira da lista. Sempre resta ao menos uma cena |
+| **Restaurar originais (n)** | traz de volta as originais apagadas, no fim da lista |
+| **Atualizar lista** | relê a pasta: arquivos novos entram no fim, os que sumiram saem |
+
+Detalhes: o nome digitado vira o nome da cena e símbolos, acentos e barras são removidos do nome do arquivo
+(`Minha cena 2` → `Minha_cena_2.scene`). Arquivo com erro aparece com `[ERRO]`, é pulado pelas setas e mostra o
+motivo. A ordem e as originais escondidas ficam em `scenes/biblioteca.txt` (se for apagado ou corrompido, volta
+a ordem padrão). A cena que está rodando fica marcada com `>`; apagá-la não a interrompe.
+Os arquivos `01_…` a `14_…` da pasta são a exportação das originais e não aparecem duplicados na lista.
+
+### 4.6 Painel do objeto selecionado (aba Objeto)
+
+Mostra os parâmetros do corpo clicado. A edição recusa corpos estáticos (salvo com a opção abaixo), ids inválidos e
+valores não finitos, e limita o que passa da faixa.
+
+| Sub-aba | O que edita |
+|---|---|
+| **Material** | massa (0,05 a 100 kg), atrito (0 a 2), restituição (0 a 1), amortecimento linear e angular (0 a 5), escala de gravidade (−2 a 5; 0 = sem gravidade, negativa = o corpo sobe), pode dormir |
+| **Posicao** | x, y, z do frame do corpo; botões **Acordar** / **Dormir**. Mover é um teletransporte: sem rastro na interpolação, velocidades e orientação não mudam |
+| **Veloc** | velocidade linear e angular (±20); **Zerar velocidades** |
+| **Orient** | orientação por **eixo-ângulo** (eixo x y z + ângulo → quatérnio `(cos a/2, sen a/2·eixo)`) ou por **omega x/y/z** (ver abaixo); **Aplicar q** e **Identidade** |
+
+Mudar a massa recalcula massa **e tensor de inércia** pela forma. No modo eixo-ângulo, o rascunho parte da
+orientação atual ao selecionar e só vai ao corpo em **Aplicar q**; o painel do quatérnio mostra o resultado.
+No modo **omega x y z**, os sliders aplicam na hora: o corpo gira ω_x em torno de X, depois ω_y em Y e depois ω_z
+em Z (eixos fixos do mundo; `q = qz·qy·qx`); **Ler do corpo** preenche os sliders com a orientação atual; ω_y vai
+de −90° a 90° (acima disso há gimbal lock).
+
+Para selecionar o cenário (chão, paredes), marque **clicar tambem em estaticos**. Um estático selecionado aceita
+posição, orientação, atrito e restituição, e **Apagar este objeto** (ou `Del`/`X`) o remove, inclusive o chão.
+
+### 4.7 Painel Adicionar
+
+| Sub-aba | O que define |
+|---|---|
+| **Forma** | tipo, tamanho, massa, atrito, restituição, opção **estatico** |
+| **Posicao** | posição x y z e velocidade de lançamento |
+| **Orient** | orientação inicial por **eixo-ângulo** ou **quatérnio w x y z** (normalizado; o quatérnio efetivo aparece na tela; entrada nula usa a identidade) |
+| **Veloc** | velocidades linear e angular iniciais |
+
+**Tipos:** caixa, esfera, tetraedro, octaedro, prisma, pirâmide, **cápsula**, **cilindro** e **modelo 3D (.obj)**.
+Tamanho de 0,2 a 4 (1 = os mesmos poliedros da cena Formas). A caixa tem três sliders de aresta (aresta = tamanho ×
+escala, de 0,05 a 40 m). Cápsula e cilindro têm **raio** e **altura** (altura total, em metros; o raio é
+multiplicado pelo tamanho).
+
+**Como criar:**
+
+- **Adicionar:** cria o objeto na posição dos sliders e o seleciona.
+- **Posicionar com clique:** com a opção ligada, o clique esquerdo na cena cria o objeto onde o mouse aponta (chão ou topo de outro corpo, com folga proporcional ao tamanho). Uma prévia em fio amarelo mostra o ponto. Enquanto estiver ligada e a aba aberta, selecionar fica desligado.
+- **Lancar da camera:** o objeto nasce 2 m à frente da câmera e sai na direção para onde ela olha, com a velocidade do slider.
+
+**Estático:** um objeto estático tem massa infinita e serve de parede, plataforma ou, inclinado pela aba Orient, de
+rampa. Massa e velocidades são ignoradas para ele.
+
+Limites: massa de 0,05 a 100 kg, |v| ≤ 60 m/s, |w| ≤ 30 rad/s. Entradas não finitas ou mundo cheio não criam nada
+(o título do painel avisa).
+
+### 4.8 Editor de juntas e de cena (aba Juntas)
+
+Para montar a própria cena: **Nova (vazia)** ou **Nova (so o chao)** no painel Cenas, objetos estáticos e
+dinâmicos pela aba Adicionar, e juntas pela aba **Juntas**. Salve pelo painel Cenas (o `R` recria a cena a partir
+do estado em que ela nasceu, então salve antes de reiniciar).
+
+Na aba Juntas:
+
+- **A** é o corpo selecionado (clique). **B** pode ser o **mundo** (cria um pivô fixo cinza no ponto de ancoragem), um corpo já escolhido ou **B: clicar**.
+- A **âncora** vem dos sliders, do último **ponto clicado** na cena ou do **centro de A**.
+- Tipos: **dobradiça** (usa o eixo dos sliders), **bola-soquete** e **distância** (liga o centro de A ao ponto ou centro de B com o comprimento atual).
+- A cena mostra uma prévia: esfera amarela na âncora, linhas até A e B e o eixo da dobradiça em vermelho.
+- **Apagar a ultima** desfaz a última junta e o pivô que ficou sem uso.
+
+O exemplo `scenes/15_Meu_cenario_editor.scene` (rampa, muro, bola e uma pá presa ao mundo por dobradiça de eixo Z)
+foi montado com este editor.
+
+### 4.9 Coluna da esquerda — gravação de trajetória (CSV)
+
+Painel **Gravar trajetoria (CSV)** (ou `F7`). Escolha **Selecionado** (o corpo clicado) ou **Todos** (os dinâmicos,
+até 200), aperte **Gravar** e rode a simulação. Há uma linha por passo físico (parar a simulação não grava linhas
+repetidas). A gravação para sozinha se a cena for trocada ou reiniciada, se o corpo gravado for apagado ou ao
+chegar a 500 000 linhas. **Salvar CSV** grava em `scenes/exports/trajetoria_<cena>_<n>.csv`; o **caminho
+completo** fica na tela até o próximo arquivo, com o botão **Copiar caminho**.
+
+Colunas (24):
+
+```text
+t, passo, corpo, x, y, z, qw, qx, qy, qz, norma_q, eixo_x, eixo_y, eixo_z, angulo_graus,
+yaw_graus, pitch_graus, roll_graus, vx, vy, vz, wx, wy, wz
+```
+
+O quatérnio é o **estado do motor**, sem interpolação; `norma_q` deve ficar em 1; os ângulos de Euler (YXZ) são
+os mesmos do painel do quatérnio, o que permite mostrar o gimbal lock num gráfico. O separador é a vírgula, o
+decimal é o ponto, com dígitos suficientes para reproduzir o valor; nunca aparece `nan` ou `inf`.
+
+### 4.10 Coluna da esquerda — mundo e debug (`M` esconde)
+
+Cinco abas. Valores não finitos são ignorados e o que excede a faixa é limitado.
+
+| Aba | Conteúdo |
+|---|---|
+| **Mundo** | gravidade x, y, z (±30 m/s²), frequência da física (10 a 240 Hz, ou seja, Δt fixo = 1/Hz), sleeping ligado e tempo para dormir; **Restaurar padroes da cena** |
+| **Solver** | iterações de velocidade (1 a 50), iterações de posição / NGS (0 = Baumgarte, até 20), slop linear (0 a 50 mm), slop de velocidade (0 a 2 m/s), warm starting, caixa **orientação: exponencial de quatérnio** (desligada = Euler); **Restaurar** |
+| **Debug** | as 9 opções do debug draw do motor (formas, AABB, Fat AABB, pontos de contato, normais de contato, juntas, centro de massa, velocidades, eixos locais) desenhadas com `DrawLine3D`; **esconder modelos** (deixa só o debug); atalhos Padrao / Desligar |
+| **Stats** | corpos (acordados / dormindo), ilhas, juntas, pares (tocando / congelados), pontos de contato e contatos no solver, nº do passo; com **medir tempos** ligado, o custo (µs) de cada fase do último passo |
+| **Evento** | liga e desliga cada efeito visual de contato; contatos agora, corpos dormindo, nº de inícios e fins de contato, último e maior impacto (m/s); **Zerar contadores** |
+
+Observações:
+
+- Mudar o Δt em execução preserva o α do acumulador; os impulsos de *warm start* vêm do Δt antigo e não são reescalados (pequeno transiente). Regravar a gravidade ou desligar o sleeping acorda todos os corpos.
+- O debug draw usa a pose interpolada pelo slerp do motor, mesmo com o modo de render em lerp ou Euler (as linhas podem divergir um pouco do modelo nesses modos).
+- **Restaurar** volta aos valores com que a cena foi criada (as cenas 8 e 9 já têm gravidade zero e passo largo; o slider de frequência mostra o extremo de 10 Hz, mas o valor só muda se for arrastado).
+- Experimente: na cena 2, baixe as iterações de velocidade para 2 e a pilha amolece; ponha iterações de posição em 0 e compare; desligue o sleeping e veja os corpos ficarem sempre “acordados” na aba Stats.
+
+### 4.11 Eventos de contato e sleeping
+
+O viewer escuta os eventos de contato do motor:
+
+- **Cor por estado:** corpo adormecido fica azulado; acordado, com a cor normal. O chão não muda.
+- **Flash no início do contato:** os dois corpos piscam em branco-amarelado, mais forte quanto maior a velocidade de impacto (`approachSpeed`; 8 m/s ou mais é o flash máximo; abaixo de 0,3 m/s é repouso e não pisca). Decai em 0,4 s de tempo físico (na câmera lenta dura mais; pausado, congela).
+- **Anéis** no ponto do impacto (até 32 ao mesmo tempo).
+
+Dica: na cena Pilha, deixe rodar alguns segundos (os blocos adormecem e ficam azuis) e arraste um bloco para acordá-los.
+
+### 4.12 Modo apresentação (`F5`) e câmera giratória (`F6`)
+
+`F5` esconde as colunas e a barra de controle: a cena ocupa a janela inteira, com o nome da cena e o **quatérnio
+grande** (w, x, y, z, |q|, eixo e ângulo) do corpo em foco. `F6` liga a câmera giratória, que gira sozinha ao
+redor do alvo (segurar o botão direito assume o controle). `ESC` sai da apresentação; um segundo `ESC` fecha o
+programa. Pausa, passo, reiniciar, troca de cena e gravação continuam pelo teclado.
+
+---
+
+## 5. Cenas incluídas
 
 | # | Cena | O que mostra |
 |---|---|---|
-| 1 | Caixa em queda | uma caixa já girando; o HUD mostra seu quatérnio |
+| 1 | Caixa em queda | uma caixa já girando; o HUD mostra o quatérnio |
 | 2 | Pilha de caixas | 6 caixas empilhadas (HUD: caixa do topo) |
 | 3 | Pirâmide de caixas | 5 fileiras, 15 caixas |
 | 4 | Chuva de corpos | 36 caixas e esferas em orientações aleatórias, com paredes |
@@ -89,330 +335,197 @@ Verificação automática, sem interação (roda 240 quadros, salva uma captura 
 | 7 | Formas (poliedros) | tetraedro, octaedro, prisma triangular, pirâmide, caixas e esferas |
 | 8 | Gimbal lock (passo 0,5 s) | gravidade zero; uma caixa gira em torno de X e atravessa pitch = 90° |
 | 9 | Interpolacao (passo 0,35 s) | gravidade zero; um cubo gira ~110° entre dois passos físicos |
-| 10 | Impacto na piramide | a pirâmide da cena 3 (com paredes) e uma bola de 8 kg rolando a 14 m/s contra ela |
-| 11 | Porta giratoria (eixo Y) | porta de 2 m presa a um poste por **dobradiça de eixo Y**; uma bola a atinge na face e ela só gira em torno do eixo |
+| 10 | Impacto na piramide | a pirâmide da cena 3, com paredes, e uma bola de 8 kg rolando a 14 m/s contra ela |
+| 11 | Porta giratoria (eixo Y) | porta de 2 m presa a um poste por dobradiça de eixo Y; uma bola a atinge na face e ela só gira em torno do eixo |
 | 12 | Gangorra (eixo Z) | prancha de 6 m com dobradiça de eixo Z; uma bola de 4 kg cai numa ponta e a bola leve da outra é lançada |
 | 13 | Pendulo-martelo (eixo Z) | haste de 5 kg presa por dobradiça de eixo Z, solta de 63° contra uma torre de 3 caixas |
 | 14 | Bilhar (esferas) | 10 esferas em triângulo e a bola branca a 14 m/s, com paredes e restituição 0,92 |
+| 15 | Meu cenario (editor) | rampa, muro, bola e uma pá presa ao mundo por dobradiça de eixo Z (arquivo `.scene`) |
+| 16 | Modelos importados | cubos com textura empilhados, esfera listrada e um toro caindo (arquivo `.scene`) |
 
-As cenas 10 a 14 (V11) são de **colisão e rotação**: nas de eixo fixo (`HingeJoint`), o quatérnio do corpo fica sempre
-no plano `(w, eixo)`: só o componente do eixo muda, e o painel mostra também a velocidade angular **w** do corpo. As teclas
-`1`…`9` vão às nove primeiras; as outras se alcançam com `<` `>` / `←` `→`. Todas começam pausadas: aperte `Espaço`.
+Nas cenas de eixo fixo (11 a 13), o quatérnio do corpo articulado fica sempre no plano `(w, eixo)`: só o
+componente do eixo muda, e o painel mostra também a velocidade angular **w**. As teclas `1`…`9` vão às nove
+primeiras da lista; as demais se alcançam com `<` `>` / `←` `→`.
 
-Os poliedros são desenhados a partir da `HalfEdgeStructure` do motor (faces em leque de triângulos, com
-tom pela normal no mundo, mais as arestas). As cenas ficam em `src/core/Scene.cpp`; para criar outra,
+Os poliedros são desenhados a partir da `HalfEdgeStructure` do motor (faces em leque de triângulos, com tom pela
+normal no mundo, mais as arestas). As cenas embutidas ficam em `src/core/Scene.cpp`; para criar outra no código,
 escreva uma função `makeXScene()` e acrescente-a em `sceneList()`.
 
-## Painel do mundo e debug (V7)
+---
 
-Painel na coluna da esquerda, embaixo (tecla `M` mostra/esconde), com quatro abas. A edição passa por `WorldEditor.h`
-(sem raylib, testado); valores não finitos são ignorados e o que excede a faixa é limitado.
+## 6. Modelos 3D
 
-| Aba | Conteúdo |
+### 6.1 Usar um modelo
+
+Em **Adicionar → Forma → modelo 3D (.obj)**, a lista mostra os `.obj` de `models/` (e de suas subpastas). Escolha
+um, ajuste a **maior dimensao** (o modelo é escalado para essa medida), massa, atrito, restituição, posição,
+orientação e velocidades como em qualquer objeto, e use **Adicionar**, **Lancar da camera** ou “posicionar com
+clique”. **estatico** vale para modelos (um cenário com textura).
+
+O resumo mostra triângulos, o tamanho do fecho, a textura (e se não foi achada) e avisa quando o modelo é
+**côncavo**. **mostrar o colisor (fio)** desenha, por cima da malha, a forma com que o motor realmente colide.
+
+O modelo é desenhado com a malha original e a textura (`map_Kd`, `.png`/`.jpg`), com iluminação por uma luz fixa; sem
+textura usa o `Kd` do `.mtl` ou a cor do corpo. Faces com o sentido errado aparecem dos dois lados.
+
+### 6.2 Importar o seu próprio modelo
+
+Três jeitos:
+
+1. **arraste o `.obj`** (ou uma pasta com `.obj`) para a janela;
+2. em **Adicionar → Forma → modelo 3D**, cole o caminho completo no campo e aperte **Importar**;
+3. copie a pasta do modelo para `physics_viewer/models/` e aperte **Atualizar lista**.
+
+Nos dois primeiros, o viewer valida o modelo e copia o `.obj`, os `.mtl` que ele cita e só as texturas que ele usa
+(`.png .jpg .bmp .tga`) para `models/<nome>/`. Nada é sobrescrito (se o nome existe, vira `<nome>_2`), caminhos
+com `..` ou absolutos dentro do arquivo são recusados e um arquivo inválido não deixa lixo. O modelo importado já
+fica selecionado.
+
+O `.mtl` e as texturas são encontrados mesmo se o `.obj` citar outro nome (usa o `.mtl` com o nome do `.obj` ou o
+único da pasta), um caminho de outro computador (usa só o nome do arquivo), maiúsculas diferentes, ou nem citar
+`mtllib` (o viewer acrescenta). O `.obj` e o `.mtl` copiados são reescritos para apontar certo. A mensagem da
+janela mostra `[.mtl: N, texturas: M]` e **todos** os avisos. Dois `.mtl` sem nome que case: o viewer não escolhe
+e avisa.
+
+O formato aceito é `.obj` (de `.fbx`, `.glb` ou `.stl`, converta antes, por exemplo no Blender: *File → Export →
+Wavefront*).
+
+### 6.3 Colisor do modelo
+
+O motor só aceita formas convexas, então o corpo físico do modelo é uma forma **convexa** escolhida em **colisor
+(forma física do corpo)**. A malha desenhada é sempre o modelo.
+
+| Colisor | O que é |
 |---|---|
-| Mundo | gravidade x, y, z (±30 m/s²), frequência da física (10 a 240 Hz, ou seja, Δt fixo = 1/Hz), sleeping ligado e tempo para dormir; **Restaurar padroes da cena** |
-| Solver | iterações de velocidade (1 a 50), iterações de posição / NGS (0 = Baumgarte legado, até 20), slop linear (0 a 50 mm), slop de velocidade (0 a 2 m/s), warm starting; **Restaurar** |
-| Debug | as 9 opções do debug draw do motor (formas, AABB, Fat AABB, pontos e normais de contato, juntas, centro de massa, velocidades, eixos locais) desenhadas com `DrawLine3D` a partir do `DebugLineBuffer`; **esconder modelos** (só o debug); atalhos Padrao / Desligar |
-| Stats | corpos (acordados / dormindo), ilhas, juntas, pares (tocando / congelados), pontos de contato e contatos no solver, nº do passo; com **medir tempos** ligado, o custo (µs) de cada fase do último passo |
-
-Observações:
-
-- **Experimente:** na cena 2 (pilha), baixe as iterações de velocidade para 2 e veja a pilha amolecer; ponha
-  `iter. posicao` em 0 e compare; desligue o sleeping e veja a pilha ficar sempre "acordada" na aba Stats.
-- Mudar o Δt em execução preserva o α do acumulador; os impulsos de warm start vêm do Δt antigo e não são
-  reescalados (pequeno transiente). Regravar a gravidade ou desligar o sleeping acorda todos os corpos.
-- O debug draw usa a pose interpolada pelo **slerp** do motor, mesmo se o modo de render for lerp ou Euler
-  (as linhas podem divergir um pouco do modelo nesses modos). Logo após um passo manual usa a pose atual.
-- O botão **Restaurar** volta aos valores com que a cena foi criada (as cenas 8 e 9 já têm gravidade zero e passo largo).
-- As cenas 8 e 9 têm Δt de 0,5 s e 0,35 s, abaixo da faixa do slider de frequência (10 Hz); o slider mostra o
-  extremo, mas o valor só muda se você o arrastar.
-
-## V24 (v0.24): exponencial, arcball e contas nos sliders
-
-- **Motor:** `Quaternion::integrateExp/integratedExp` e `IntegratorSettings::orientation` (`Exponential` = padrão, `Euler`). Exponencial: `q <- exp(½ dt w) q` = (cos θ/2, sen θ/2 · w/|w|) com θ = |w|·dt; o ângulo girado por passo é exatamente |w|·dt (Euler erra em O(θ³): a 30 rad/s e 60 Hz o teste mostra mais de 0,1 rad de erro em 2 s). No viewer: aba **Solver** do painel do mundo, caixa "orientacao: exponencial de quaternio" (desligada = Euler).
-- **Arcball** (coluna esquerda, abaixo do quatérnio): a esfera mostra os 3 círculos máximos dos eixos locais do corpo (x vermelho, y verde, z azul; a metade de trás é apagada) e, em laranja, o **eixo de rotação do quatérnio**. Com o corpo **selecionado**, arraste sobre a esfera: o ponto agarrado acompanha o cursor (`q = Δ · q0`, Δ no espaço da câmera levado ao mundo; `Arcball.h`, testado). A velocidade angular é zerada durante o gesto; pause a cena para girar com calma.
-- **Sliders (clique duplo):** o campo já vem com o **valor atual**, com o cursor no fim, para editar; e aceita **contas**: `+ - * /`, parênteses, sinal, vírgula decimal, notação científica e unidade no fim (`4/2` -> 2, `1-4` -> -3, `2*(3+1)` -> 8). Divisão por zero ou sintaxe inválida: mantém o valor. O resultado continua limitado à faixa do slider.
-
-## Quack3 v0.23 (V23) e v0.23.1
-
-- **v0.23.1:** cores trocadas: botões, sliders e cabeçalhos de painel agora usam o tom escuro (47,50,59) e o fundo dos painéis o tom mais claro (68,73,86). Versão com patch: `v0.<fase>.<correção>` (`AppInfo.h`).
-
-- Nome do programa: **Quack3**; versão `v0.<número da fase>` (`include/viewer/core/AppInfo.h`), título da janela "Quack3 v0.23".
-- Tema cinza-grafite (`applyTheme()` em `main.cpp`): painéis, botões, abas, sliders e campos em cinza com destaque azul; textos claros.
-- `fitButton`/`fitToggleGroup`: o texto do botão encolhe (mín. 10 px) para caber, ex.: "Restaurar originais (n)" com a coluna estreita.
-- Coluna direita: Interpolação (topo), Cenas, Objetos; títulos: "Interpolacao, cenas e objetos" / "Quaternio, mundo e gravacao".
-
-## Lista de cenas, apagar e reordenar (V22)
-
-O painel **Cenas** saiu do painel de objetos (que agora tem só Objeto | Adicionar | Juntas) e fica **no topo da coluna direita**. Nele há uma **lista única**: as 14 cenas originais e, depois delas, os arquivos `.scene` da pasta `scenes/` (em ordem alfabética na primeira vez). As **setas, os botões `<` `>` e as teclas 1–9** percorrem essa lista na ordem em que ela está (com volta ao início). Os arquivos entram ao abrir o programa, então o que você salvou antes continua disponível. Os 14 arquivos `01_…` a `14_…` da pasta são só a exportação das originais e **não aparecem duplicados**.
-
-- **Salvar cena atual:** grava `scenes/<nome>.scene`, põe a cena **no fim da lista** (ou atualiza a que já tinha esse nome) e ela vira a atual.
-- **Subir / Descer:** muda a posição da cena escolhida (qualquer uma, original ou salva). A cena que está rodando continua marcada com `>`.
-- **Apagar:** pede um segundo clique (*Confirmar apagar*). Apagar uma **salva** apaga o arquivo `.scene` do disco; apagar uma **original** só a tira da lista, e **Restaurar originais (n)** traz de volta, no fim. Sempre fica pelo menos uma cena. Se a cena apagada é a que está rodando, ela continua rodando até você trocar.
-- **Carregar a escolhida:** vai para a cena marcada na lista (a seta também serve). Arquivo com erro aparece com `[ERRO]` e é **pulado** pelas setas, com a mensagem do motivo.
-- **Atualizar lista:** relê a pasta (arquivos novos entram no fim, os que sumiram saem).
-- A ordem e as originais escondidas ficam em `scenes/biblioteca.txt` (texto simples, lido na abertura; se for apagado ou corrompido, volta a ordem padrão).
-- Limitação conhecida: um `.scene` gerado numa build float pode ser recusado por uma build double (checagem de planaridade mais estrita); o exemplo `16_Modelos_importados` é assim.
-
-## Painéis: sliders editáveis, debug e caminho do CSV (V20)
-
-- **Clique duplo rápido em qualquer slider** (objeto, adicionar, juntas, mundo, solver, FPS de render) troca a barra por um campo de texto com o valor atual. Digite o número (aceita vírgula decimal e unidade no fim, "2,5 m") e aperte **Enter** ou **clique fora** para aplicar; **Esc cancela** e, nesse momento, não fecha o programa (Esc só fecha fora de qualquer edição de texto, como já era com o campo de nome). Enquanto você digita os atalhos (P, R, WASD, setas, números...) ficam desligados. O primeiro clique do clique duplo move a barra, mas o segundo o desfaz, então cancelar mantém o valor de antes. O número vale na **unidade que aparece ao lado** (kg, %, mm, m...) e é limitado à faixa do slider (por exemplo massa de 0,05 a 100 kg na barra de objeto: 10 kg no máximo do slider); texto que não é número é ignorado. Se a coluna rolar ou a aba mudar durante a edição, ela é cancelada.
-- **Sliders largos:** (V21: o rótulo agora termina onde a barra começa, em vez de ir até a borda da coluna e ficar por baixo dela; a coluna de rótulos tem 92 a 124 px) rótulo e valor passaram a ser proporcionais à largura da coluna (antes 124 + 88 px fixos), então na coluna mais estreita a barra tem cerca de 120 px em vez de 70; os textos encolhem a fonte em vez de vazar.
-- **Debug:** o rótulo de cada caixa agora é cortado dentro da própria coluna (nunca invade a outra) e clicar no rótulo também marca/desmarca; vale para todas as caixas de seleção dos painéis.
-- **CSV:** depois de *Salvar CSV*, o **caminho completo** fica na tela (até 4 linhas, quebrando depois de barras) até o próximo arquivo, com o botão **Copiar caminho** (vai para a área de transferência).
-
-## Atrito corrigido e WASD (V19)
-
-**Bug do atrito.** O atrito de deslizamento sempre funcionou (uma esfera lançada a 5 m/s passa a rolar a 3,57 m/s), mas **nada freava o giro em torno da normal do contato (Y, no chão) nem a rolagem**: o cone de Coulomb só age nos pontos de contato e uma esfera toca em um só, sem braço de alavanca. Só a restituição, em batidas, tirava um pouco de giro. O motor agora tem, para contatos com **esfera, cápsula ou cilindro**, duas linhas angulares: *torção* (limite de torque = `kSpinFriction`=0,03 m · μ · Σλn) e *resistência à rolagem* (`kRollingFriction`=0,02 m · μ · Σλn). Como multiplicam o μ do par de materiais (média geométrica), atrito 0 continua sendo gelo e atrito máximo para mais depressa. Caixas e poliedros não mudam. Efeito de bola: uma esfera girando a 10 rad/s com atrito 0,5 para em poucos segundos, e uma bola rolando termina parando; a cena Gangorra mudou de forma legítima (a bola freia antes e a prancha volta mais tarde).
-
-**WASD.** **W/S** movem a câmera para a frente/trás (na direção em que ela olha, projetada no chão), **A/D** para os lados, **E** sobe e **Q** desce, **Shift** acelera 3x. A velocidade cresce com a distância da câmera (3 m/s + 0,8 m/s por metro). Não mexe com as teclas já usadas e não age enquanto você digita em um campo de texto. **Home** (ou o botão de câmera) volta ao enquadramento inicial, e trocar de cena também zera o deslocamento.
-
-## Cápsula e cilindro (V18)
-
-**No motor.** `CapsuleShape(raio, meiaAlturaDoSegmento)` e `CylinderShape(raio, meiaAltura)`, ambos com o **eixo no Y local**. A cápsula é um segmento mais um raio (altura total = 2·(meia-altura + raio)); com segmento nulo vira esfera. O motor trata esfera e cápsula como "núcleo + raio" no GJK/EPA, e deitados (cápsula ou cilindro no chão) geram **2 pontos de contato** em vez de 1, então não ficam balançando. Inércia, volume, AABB, raycast e debug draw têm fórmulas próprias, conferidas por integração numérica nos testes.
-
-**No viewer.** Em **Adicionar → Forma** há três linhas de botões: a última tem *capsula*, *cilindro* e *modelo 3D*. Para os dois primeiros aparecem os sliders **raio** e **altura** (a altura é total, em metros; o raio é multiplicado pelo "tamanho"). Num **modelo 3D** o colisor agora pode ser *Capsula* ou *Cilindro*: o ajuste é automático à caixa envolvente do modelo (raio = a maior meia-aresta entre X e Z; altura pelo Y; na cápsula as pontas arredondadas ficam dentro dessa altura), e dois sliders (**raio do colisor** e **altura do colisor**, de 25% a 200%) ajustam em cima. Ideal para uma pessoa em pé: o modelo precisa ter o **Y para cima**; se o eixo mais longo não for Y o painel avisa. "mostrar o colisor (fio)" desenha a forma física por cima da malha. O `.scene` guarda `shape capsule <raio> <meia-altura>` e `shape cylinder <raio> <meia-altura>` (e a linha `model` vale com eles).
-
-## Seu próprio modelo 3D e o tipo de colisor (V17)
-
-**Enviar o seu arquivo.** Três jeitos: (1) **arraste o `.obj`** (ou uma pasta com `.obj`) para a janela do viewer; (2) em **Adicionar → Forma → "modelo 3D (.obj)"** cole o caminho completo no campo e aperte **Importar**; (3) copie a pasta do modelo para `physics_viewer/models/` e aperte **Atualizar lista**. Nos dois primeiros o viewer copia o `.obj`, os `.mtl` que ele cita e só as texturas que ele usa (`.png .jpg .bmp .tga`) para `models/<nome>/`, **nunca sobrescreve** (se o nome existe vira `<nome>_2`), recusa caminhos com `..`/absolutos dentro do arquivo, e valida o modelo antes de copiar (arquivo inválido não deixa lixo). O modelo importado já fica selecionado na lista. Só o formato `.obj` por enquanto (de `.fbx/.glb/.stl`: converta, por exemplo no Blender, File → Export → Wavefront).
-
-**Tipo de colisor.** Abaixo da lista, **colisor (forma física do corpo)**: *Fecho* (fecho convexo, o mais fiel), *Caixa* (caixa envolvente alinhada aos eixos do modelo) ou *Esfera* (esfera envolvente). A malha desenhada é sempre o modelo; o resumo mostra o quanto o colisor sobra em volume, e "mostrar o colisor (fio)" desenha a forma física por cima. A escolha vai para o `.scene` (a linha `model` agora vale com `shape box`, `shape sphere` e `shape poly`). Desde a V18 há também *Capsula* e *Cilindro* (veja a seção seguinte).
-
-**Painéis sem sobreposição.** As alturas dos painéis agora são **calculadas do conteúdo** (`PanelMetrics.h`, testado) e todo texto de painel encolhe/corta para caber na coluna, em vez de passar da borda. (Corrige os prints: caixa de seleção "estático" sobre "posicionar com clique" e o painel do quatérnio.)
-
-## Gravar trajetória em CSV e modo apresentação (V16)
-
-**Gravar.** Coluna da esquerda, painel **Gravar trajetoria (CSV)** (ou `F7`): escolha *Selecionado* (o corpo clicado) ou *Todos* (os dinâmicos, até 200), aperte **Gravar** e rode a simulação. Uma linha por passo físico (parar a simulação não grava linhas repetidas). A gravação para sozinha se a cena for trocada ou reiniciada, se o corpo gravado for apagado ou ao chegar a 500 000 linhas. **Salvar CSV** grava em `scenes/exports/trajetoria_<cena>_<n>.csv`.
-
-Colunas: `t, passo, corpo, x, y, z, qw, qx, qy, qz, norma_q, eixo_x, eixo_y, eixo_z, angulo_graus, yaw_graus, pitch_graus, roll_graus, vx, vy, vz, wx, wy, wz`. O quatérnio é o **estado do motor** (sem interpolação); `norma_q` deve ficar em 1; Euler YXZ é o mesmo do painel do quatérnio (útil para mostrar o gimbal lock num gráfico). Vírgula como separador, ponto decimal, dígitos suficientes para voltar ao mesmo valor; nunca `nan`/`inf`.
-
-**Apresentação (`F5`).** Esconde as colunas e a barra de controle: a cena ocupa a janela inteira, com o nome da cena e o **quatérnio grande** (w, x, y, z, |q|, eixo e ângulo) do corpo em foco/selecionado. `F6` liga a câmera giratória (gira sozinha ao redor do alvo; segurar o botão direito assume o controle). `ESC` sai da apresentação (um segundo `ESC` fecha o programa). Pausa, passo, reiniciar, trocar de cena e gravar continuam pelo teclado.
-
-## Importar modelo 3D com textura (V15)
-
-Na janela: aba **Adicionar → Forma → "modelo 3D (.obj)"**. A lista mostra os `.obj` de `physics_viewer/models/` (e de uma subpasta); escolha um, ajuste **maior dimensao** (o modelo é escalado automaticamente para essa medida), massa, atrito, restituição, posição, orientação (quatérnio) e velocidades como em qualquer objeto, e use **Adicionar**, **Lançar da câmera** ou "posicionar com clique". O resumo mostra triângulos, o tamanho do fecho, a textura (e se não foi achada) e avisa quando o modelo é **côncavo** (colide como o fecho; o buraco é preenchido). **estatico** vale para modelos (um cenário com textura). "mostrar o fecho convexo (fio)" desenha, por cima da malha, a forma com que o motor realmente colide.
-
-- O modelo é desenhado com a malha original e a textura (`map_Kd`, `.png`/`.jpg`), iluminado por uma luz fixa; sem textura usa o `Kd` do `.mtl` ou a cor do corpo. Faces sem o sentido certo aparecem dos dois lados.
-- **Salvar/carregar:** o `.scene` guarda o fecho (como qualquer poliedro) **e** uma linha `model <escala> <deslocamento> <arquivo.obj>`. Ao carregar com a pasta `models/` presente, a malha volta com a textura; se o `.obj` sumiu, o corpo carrega como poliedro comum (continua colidindo igual) e a mensagem mostra um AVISO. Exemplo: `scenes/16_Modelos_importados.scene` (cubos com textura empilhados, esfera listrada, toro caindo).
-- **Limites:** `.obj` até 32 MB, 400 mil vértices, 800 mil triângulos; fecho com até 4096 vértices e 8192 faces; tamanho final de 0,05 a 40 m; `.scene` até 32 MB. Em `float`, nuvens muito densas (dezenas de milhares de vértices quase coplanares) são recusadas como "numericamente instável": use um modelo menos detalhado (ou compile com `-DPHYSICS_USE_DOUBLE`). A malha é desenhada triângulo a triângulo: modelos acima de ~60 mil triângulos podem ficar lentos.
-
-### Núcleo (testado sem janela)
-
-- **`ConvexHull`** — fecho convexo 3D por *quickhull*, algoritmo próprio: tetraedro inicial com pontos extremos, "olho" = ponto mais distante, região visível e horizonte, faces novas ligadas ao olho. Triângulos vizinhos e coplanares são **fundidos em polígonos** (um cubo volta com 6 faces de 4 vértices, não 12 triângulos, e apoia estável na face inteira). A tolerância é relativa ao tamanho e menor que a do motor; o resultado é conferido como o motor vai conferir e, se a fusão falhar, volta a triângulos. Entradas degeneradas (menos de 4 pontos, NaN, coincidentes, colineares, coplanares, finíssimas) dão erro com mensagem, nunca um poliedro inválido.
-- **`ObjModel`** — leitor de `.obj` (`v`, `vt`, `f` em qualquer das formas `v`, `v/vt`, `v//vn`, `v/vt/vn`, índices negativos, polígonos em leque, `usemtl`, `mtllib`) e `.mtl` (`newmtl`, `Kd`, `map_Kd`). Erros com número de linha e **sem modelo parcial**; limites (32 MB, 400 mil vértices, 800 mil triângulos, coordenadas até 1e6); `mtllib`/`map_Kd` com `..`, caminho absoluto ou unidade são recusados; `.mtl` ausente só gera aviso.
-- **`ModelCollider`** — do modelo à forma de colisão: centra na caixa envolvente (precisão com coordenadas grandes), calcula o fecho, centra no **centroide** (o corpo gira em torno do centro de massa) e devolve o `PolyhedronShape`, o deslocamento para desenhar a malha original e indicadores (vértices/faces do fecho, volume do modelo × do fecho, `concave`). `autoScale` ajusta a maior dimensão a um tamanho-alvo. Escala de 0,001 a 1000; maior dimensão final de 0,05 a 40 m.
-- **Limitação assumida:** um modelo côncavo (toro, xícara) **colide como o seu fecho** — o buraco é preenchido (teste: uma esfera pousa no "toro cheio"). A malha desenhada continua sendo o modelo original.
-- Exemplos em `physics_viewer/models/`: `cubo` (textura xadrez), `esfera` (icosfera de 320 faces, listras) e `toro` (côncavo), com `.mtl` e `.png`.
-
-## Editor de cena (V14)
-
-Monte a própria cena do zero e salve pela painel **Cenas** (V12; desde a V22 ele é um painel próprio):
-
-1. Painel **Cenas** → **Nova (vazia)** ou **Nova (so o chao)**. A cena nasce pausada. (R recria a cena a partir do estado em que ela nasceu, então salve antes de reiniciar.)
-2. Aba **Adicionar** → **Forma**: a caixa ganha três sliders de aresta (x, y, z; aresta = tamanho × escala, de 0,05 a 40 m) e a opção **estatico**. Um objeto estático tem massa infinita: serve de parede, plataforma ou, inclinado pela aba **Orient**, de rampa. Massa e velocidades são ignoradas para ele.
-3. Aba **Objeto**: marque **clicar tambem em estaticos** para selecionar o cenário (chão, paredes). Um estático selecionado aceita posição, orientação (quatérnio por eixo-ângulo), atrito e restituição; **Apagar este objeto** (ou Del/X) o remove, inclusive o chão.
-4. Aba **Juntas**: A = corpo selecionado (clique); B = o **mundo** (cria um pivô fixo cinza no ponto de ancoragem), um corpo já escolhido ou "B: clicar". A âncora vem dos sliders, do último **ponto clicado** na cena ou do **centro de A**. Dobradiça usa o eixo (sliders); distância liga o centro de A ao ponto/centro de B com o comprimento atual. A cena mostra uma prévia (esfera amarela na âncora, linhas até A e B, eixo da dobradiça em vermelho). **Apagar a ultima** desfaz a última junta e o pivô que ficou sem uso.
-
-O núcleo (sem janela, testado) está em `Scene` (`makeEmptyScene`), `ObjectSpawner` (`isStatic`, `boxScale`), `BodyEditor` (pose e material de estáticos), `Interaction` (`pickBody(..., includeStatic)`, `deleteBody(..., allowStatic)`) e `JointEditor` (`createJoint`, `destroyLastJoint`, `jointCount`, `pointOnRay`). Exemplo pronto: `scenes/15_Meu_cenario_editor.scene` (rampa, muro, bola e uma pá presa ao mundo por dobradiça de eixo Z). Cenas sem nenhum corpo agora são arquivos válidos.
-
-## Painéis acoplados e rolagem (V13)
-
-Os painéis não flutuam mais sobre a cena: ficam em **duas colunas fixas nas laterais**, e a cena 3D ocupa o espaço entre
-elas (como no Blender). Isso acaba com a sobreposição de textos: campo novo só aumenta a rolagem.
-
-- **Esquerda:** quatérnio do corpo em foco (com a velocidade angular **w**) e o painel do mundo/debug (`M` esconde).
-  **Direita:** painel **Cenas** (V22, no topo), interpolação de render e FPS, e o painel de abas Objeto | Adicionar | Juntas.
-- **Largura:** arraste a borda (cursor de redimensionar). Limites: mínimo 340 px, máximo 45% da janela, e a cena nunca
-  fica com menos de 320 px. O botão `<` / `>` do topo recolhe e reabre a coluna.
-- **Rolagem:** roda do mouse sobre a coluna, ou arrastar / clicar na barra fina à direita dela. Os controles recortados
-  pela coluna ficam bloqueados (um botão escondido não dispara por baixo).
-- **A cena 3D** é desenhada numa **textura do tamanho exato da área central**: a proporção da câmera acompanha a área, e o
-  clique/arrasto usa o raio calculado dentro dela. Girar a câmera só começa com o botão apertado sobre a cena. Mudar a
-  largura de uma coluna reenquadra a cena (o campo de visão vertical é fixo: a largura aparece ou some nas laterais).
-  Observação: a textura não usa o antisserrilhamento (MSAA) da janela, então as bordas dos objetos ficam um pouco mais serrilhadas.
-- **Layout salvo:** larguras e colunas recolhidas ficam em `scenes/viewer_layout.ini` e voltam na próxima execução.
-  Arquivo inválido é ignorado (vale o padrão).
-- Núcleo `DockLayout.h` (sem raylib, testado): retângulos das colunas, bordas, viewport e rolagem (polegar proporcional,
-  limites, roda); janela pequena demais faz as colunas cederem espaço à cena.
-
-## Salvar e carregar cenas (V12)
-
-Aba **Cenas** da coluna da direita (`SceneFile.h`, sem raylib, testado). Os arquivos ficam em `physics_viewer/scenes/`
-(o caminho é fixado na compilação).
-
-- **Salvar cena atual:** grava o **estado de agora** (poses, quatérnios, velocidades, parâmetros dos corpos, objetos que
-  você adicionou ou lançou, juntas, gravidade, Δt, iterações e a câmera inicial) em `<nome>.scene`. O nome digitado vira o
-  nome da cena; símbolos, acentos e barras são removidos do nome do arquivo (`Minha cena 2` → `Minha_cena_2.scene`).
-- **Carregar:** escolha na lista e clique em *Carregar*. A cena entra **pausada**; `R` / **Reiniciar** a recria a partir
-  do arquivo. As teclas `←` `→` voltam às cenas embutidas. O HUD mostra `[arquivo]`.
-- Com o campo do nome em edição, os atalhos de teclado ficam desligados (digite à vontade); `ESC` sai da edição e só um
-  segundo `ESC` fecha o programa.
-- Os arquivos `01…14` da pasta são as cenas embutidas, gravadas por `scene_export` (`scene_export physics_viewer/scenes`),
-  como exemplos para copiar e editar.
-
-Formato (texto, comentários com `#`): cabeçalho `physics_scene 1`, parâmetros do mundo, blocos `body … end` (tipo
-`static|dynamic|kinematic`, forma `box|sphere|poly|none`, massa, posição, **`orientation w x y z`**, velocidades, material,
-cor, `focus`), `joint hinge|ballsocket|distance …` e `link`. Corpos são numerados 1, 2, 3… pela ordem no arquivo. A
-descrição completa está no cabeçalho de `include/viewer/core/SceneFile.h`.
-
-- **Não é salvo:** estado de sono (a cena carrega com todos acordados), contatos e impulsos acumulados (*warm start*).
-  Uma cena recém-criada, salva e recarregada reproduz a mesma trajetória (testado nas 14 cenas).
-- **Arquivo inválido** (número malformado ou NaN/inf, quatérnio nulo, índice de corpo ou de junta fora da faixa, poliedro
-  côncavo, mais de 2000 corpos, mais de 8 MB…): mensagem com o número da linha e a cena atual **não é alterada**.
-
-## Eventos e sleeping (V9)
-
-O viewer escuta os eventos de contato do motor (`IContactListener`, via `ContactTracker.h`, sem raylib, testado):
-
-- **Cor por estado:** corpo **adormecido** (sleeping) fica azulado; acordado, com a cor normal. O chão não muda.
-- **Flash no início do contato:** os dois corpos piscam em branco-amarelado, mais forte quanto maior a velocidade de impacto
-  (`approachSpeed` do motor; 8 m/s ou mais = flash máximo; abaixo de 0,3 m/s é repouso e não pisca). Decai em 0,4 s de tempo
-  **físico** (na câmera lenta dura mais; pausado, congela).
-- **Anéis** no ponto do impacto (até 32 ao mesmo tempo).
-- Aba **Evento** do painel do mundo: liga/desliga cada efeito; mostra contatos agora, corpos dormindo, nº de inícios e fins de
-  contato, último e maior impacto (m/s); **Zerar contadores**.
-- Dica: na cena Pilha, deixe rodar uns segundos (os blocos adormecem e ficam azuis); dê um empurrão (arraste um bloco) e eles
-  acordam. Contatos de repouso contam como início, mas não piscam.
-
-## Adicionar objetos (V8)
-
-Aba **Adicionar** da coluna da direita. A criação passa por `ObjectSpawner.h` (sem raylib, testado).
-
-| Sub-aba | O que define |
-|---|---|
-| Forma | tipo (caixa, esfera, tetraedro, octaedro, prisma, pirâmide), tamanho (0,2 a 4; 1 = os mesmos poliedros da cena Formas), massa, atrito, restituição |
-| Posicao | posição x y z; velocidade de lançamento |
-| Orient | orientação inicial por **eixo-ângulo** ou por **quatérnio w x y z** (normalizado; o quatérnio efetivo aparece na tela; entrada nula usa a identidade) |
-| Veloc | velocidades linear e angular iniciais |
-
-- **Adicionar** cria o objeto na posição dos sliders e o seleciona (a aba Objeto mostra os parâmetros dele).
-- **Posicionar com clique**: ligado, o clique esquerdo na cena cria o objeto onde o mouse aponta (chão ou topo de outro corpo, com folga proporcional ao tamanho) e uma prévia em fio amarelo mostra o ponto; selecionar fica desligado enquanto estiver ligado e a aba Adicionar aberta.
-- **Lancar da camera**: o objeto nasce 2 m à frente da câmera e sai na direção para onde ela olha, com a velocidade do slider.
-- Limites: massa 0,05 a 100 kg, |v| ≤ 60 m/s, |w| ≤ 30 rad/s; entradas não finitas ou mundo cheio não criam nada (o título do painel avisa).
-
-## Painel do objeto selecionado (V6)
-
-Aba **Objeto** da coluna da direita; mostra os parâmetros quando há um corpo selecionado (clique). A edição passa por `BodyEditor.h` (sem raylib,
-testado); todas as funções recusam corpos estáticos, ids inválidos e valores não finitos, e limitam o que
-excede a faixa.
-
-| Aba | O que edita | Observações |
-|---|---|---|
-| Material | massa (0,05 a 100 kg, slider em escala √), atrito (0 a 2), restituição (0 a 1), amortecimento linear e angular (0 a 5), escala de gravidade (−2 a 5), pode dormir | mudar a massa recalcula massa **e tensor de inércia** pela forma (`MassData::fromShapeMass`); escala 0 = sem gravidade, negativa = o corpo sobe |
-| Posicao | x, y, z do frame do corpo; botões Acordar / Dormir | mover é um "teletransporte" (`setBodyTransform`): sem rastro na interpolação, velocidades e orientação não mudam |
-| Veloc | velocidade linear e angular (±20); Zerar velocidades | |
-| Orient | eixo (x, y, z) + ângulo → **quatérnio** `(cos a/2, sen a/2 · eixo unitário)`; botões Aplicar q e Identidade | o rascunho parte da orientação atual ao selecionar e só vai ao corpo em **Aplicar q**; o painel do quatérnio (à esquerda) mostra o resultado |
-
-Limites conhecidos: os sliders usam faixas fixas (posição ±12 m, y de −2 a 14 m; velocidades ±20); um valor
-fora da faixa continua valendo no corpo, mas só aparece "preso" na borda do slider. Um slider só edita
-quando o mouse está sobre a barra com o botão apertado, para que a faixa não altere valores sozinha.
-
-## Barra de controle (V5)
-
-A barra do topo usa `TimeControl.h` (sem raylib, testado). Como o raygui devolve o clique durante o desenho,
-os botões levantam um pedido que é tratado no início do quadro seguinte.
-
-- **Pausar / Passo:** pausado, nada avança (nem α). **Passo** executa exatamente um `world.step()` (um passo
-  físico fixo, o mesmo de `update()`), e logo depois o desenho usa α = 1, isto é, mostra o estado novo e não
-  uma mistura com o anterior. O HUD mostra `passo #N`. Ao continuar, o acumulador retoma de onde estava.
-- **Câmera lenta:** o tempo de render é multiplicado por 1, 1/2, 1/4 ou 1/10 antes de entrar no acumulador; a
-  física continua em passos fixos (o resultado é o mesmo, só mais devagar), e a interpolação mantém o
-  movimento suave.
-- **Reset cam / Alvo:** `OrbitCamera::reset` e alternar o alvo (mundo ⇄ selecionado); resetar também volta o
-  alvo para o centro do mundo.
-- **Largura mínima:** a barra ocupa ~850 px e agora atravessa a janela inteira (as colunas ficam abaixo dela).
-
-## Interação (V4)
-
-Tudo isto vive em `Interaction.h` (sem raylib, testado); a janela só converte o mouse em um raio.
-
-- **Selecionar:** `PhysicsWorld::raycast` com filtro que ignora corpos estáticos. O selecionado ganha contorno
-  amarelo e passa a ser o corpo do painel do quatérnio.
-- **Arrastar com mola:** a mola-amortecedor liga o *ponto clicado* do corpo (guardado no referencial do corpo)
-  ao ponto do raio do mouse na mesma profundidade. A força entra por `applyForceAtPoint`, então puxar pela
-  quina também gera torque e muda o quatérnio. Rigidez ω0 = 8 rad/s por unidade de massa, amortecimento
-  crítico, aceleração limitada a 150 m/s². **Aproximação conhecida:** o motor consome as forças só no passo
-  fixo, então a força de cada quadro de render é escalada por `frameTime/Δt` para dar o impulso certo
-  qualquer que seja o FPS (e a escala de tempo da câmera lenta: usa-se o tempo físico do quadro); com passo físico largo (cenas 8 e 9) ω0 é reduzido para `0,5/Δt` para a mola
-  explícita não divergir.
-- **Lançar / apagar:** corpos criados ou apagados em tempo de execução ficam registrados em `Scene::bodies`
-  e `Scene::links`; `R` volta ao estado original da cena. Estáticos (chão, âncoras) não podem ser apagados.
-- **Câmera:** `OrbitCamera::reset` e `followTarget` (suavização exponencial, independente do FPS).
-
-## Painel do quatérnio e modos de interpolação (V3)
-
-O painel à esquerda mostra, para o **corpo em foco** da cena, a pose que está sendo *desenhada*:
-`x y z w`, `|q|`, eixo-ângulo e ângulos de Euler (yaw/pitch/roll, convenção YXZ). Perto de pitch = ±90° o
-painel avisa **GIMBAL LOCK**: yaw e roll giram o mesmo eixo e a conversão perde um grau de liberdade
-(ela devolve roll = 0). O painel da direita escolhe como a orientação é interpolada entre os dois últimos
-passos físicos (`RenderPose.h`, sem raylib):
-
-| Modo | O que faz | O que se vê |
-|---|---|---|
-| slerp | interpolação esférica (a do motor) | giro de velocidade constante, `\|q\| = 1` |
-| lerp sem normalizar | `(1-t)·q0 + t·q1`, sem renormalizar | `\|q\|` cai no meio do passo (≈ cos(Δ/4), Δ = giro do passo): a matriz sai deformada, o cubo encolhe e o ritmo varia |
-| Euler | interpola yaw/pitch/roll e reconverte | caminho torto; atravessando o gimbal lock a pose "pula" (desvio ≈ 90° − pitch inicial) |
-
-Com passo físico de 1/60 s e giro de poucos graus por passo, os três modos são quase idênticos. Por isso
-as cenas 8 e 9 usam passo largo (0,5 s e 0,35 s; 49° e 110° por passo, medidos): a interpolação deixa de
-ser um detalhe e vira a coisa mais visível da tela.
-
-## Onde o quatérnio entra
-
-A orientação do corpo é um quatérnio no motor do começo ao fim (integração, normalização, slerp na
-interpolação de render). A matriz 4×4 que vai para a placa de vídeo é calculada por
-`viewer::toMat4()` (`include/viewer/core/ViewerMath.h`), que usa o `Quaternion::toMatrix()` **do motor** e
-a entrega ao OpenGL por `rlMultMatrixf()`. O HUD mostra `w x y z` e `|q|` da pose interpolada e a janela
-desenha os eixos locais do corpo (X vermelho, Y verde, Z azul).
-
-## Estrutura
+| **Fecho** | fecho convexo dos vértices (o mais fiel); um cubo volta com 6 faces de 4 vértices e apoia estável na face inteira |
+| **Caixa** | caixa envolvente alinhada aos eixos do modelo |
+| **Esfera** | esfera envolvente |
+| **Capsula** | ajuste automático à caixa envolvente (raio = a maior meia-aresta entre X e Z; altura pelo Y; as pontas arredondadas ficam dentro da altura) |
+| **Cilindro** | mesmo ajuste automático da cápsula |
+
+Para cápsula e cilindro, os sliders **raio do colisor** e **altura do colisor** (25% a 200%) ajustam em cima do
+ajuste automático. São ideais para uma pessoa em pé: o modelo precisa ter o **Y para cima** (o painel avisa se o
+eixo mais longo não for Y). O resumo mostra o quanto o colisor sobra em volume.
+
+Um modelo **côncavo** (toro, xícara) colide como o seu fecho: o buraco é preenchido. A malha desenhada continua
+sendo a original.
+
+### 6.4 Limites
+
+`.obj` até 32 MB, 400 mil vértices e 800 mil triângulos; coordenadas até 1e6; fecho com até 4096 vértices e 8192
+faces; escala de 0,001 a 1000; tamanho final de 0,05 a 40 m; `.scene` até 32 MB. A malha é desenhada triângulo a
+triângulo: modelos acima de ~60 mil triângulos podem ficar lentos. Em `float`, nuvens muito densas (dezenas de
+milhares de vértices quase coplanares) são recusadas como “numericamente instável”: use um modelo menos detalhado
+ou compile com `-DPHYSICS_USE_DOUBLE=ON`.
+
+Sintaxe lida: `.obj` com `v`, `vt`, `f` em qualquer forma (`v`, `v/vt`, `v//vn`, `v/vt/vn`), índices negativos,
+polígonos em leque, `usemtl` e `mtllib`; `.mtl` com `newmtl`, `Kd` e `map_Kd`. Erros trazem o número da linha e
+nunca produzem um modelo parcial.
+
+Modelos de exemplo em `models/`: `cubo` (textura xadrez), `esfera` (icosfera de 320 faces, listras) e `toro`
+(côncavo), cada um com `.mtl` e `.png` (veja `models/LEIA-ME.txt`).
+
+---
+
+## 7. Formato de cena (`.scene`)
+
+Arquivo de texto legível e editável à mão; `#` começa um comentário. A descrição completa está no cabeçalho de
+`include/viewer/core/SceneFile.h`.
+
+```text
+physics_scene 1
+name Minha cena
+gravity 0 -9.81 0
+timestep 0.0166666667
+iterations 10 3              # velocidade, posição
+slop 0.005 0.5               # linear [m], velocidade [m/s]
+warm_start 1
+sleep 1 0.5                  # ligado, tempo [s]
+camera 0 1.5 0 12            # alvo x y z e distância
+body                         # corpos são numerados 1, 2, 3... na ordem do arquivo
+  type dynamic               # static | dynamic | kinematic
+  shape box 0.5 0.5 0.5      # box | sphere r | capsule r meia-altura | cylinder r meia-altura | poly | none
+  mass 1
+  position 0 5 0
+  orientation 1 0 0 0        # QUATÉRNIO  w x y z  (normalizado ao carregar; nulo = erro)
+  velocity 0 0 0
+  angular_velocity 1.2 2 0.7
+  material 0.5 0.3           # atrito, restituição
+  damping 0 0                # linear, angular
+  gravity_scale 1
+  allow_sleep 1
+  color 240 150 60
+  focus                      # o corpo do painel do quatérnio (no máximo um)
+  model 0.5 0.1 0.2 0.0 cubo.obj   # opcional: escala, deslocamento, arquivo (relativo a models/)
+end
+joint hinge 1 2  ax ay az  dx dy dz  collide      # âncora (mundo), eixo, colide 0|1
+joint ballsocket 1 2  ax ay az  collide
+joint distance 1 2  ax ay az  bx by bz  length collide
+link 1 2                     # linha desenhada entre os centros
+```
+
+- Em `shape poly`, as linhas `vertex x y z` e `face i j k ...` (índices a partir de 0, anti-horário visto de fora) descrevem o poliedro convexo.
+- `shape none` é um pivô estático sem forma, desenhado como uma pequena esfera.
+- A linha `model` vale com `shape box`, `sphere`, `capsule`, `cylinder` e `poly`. Ao carregar com a pasta `models/` presente, a malha volta com a textura; se o `.obj` sumiu, o corpo carrega como poliedro comum (colide igual) e a mensagem mostra um AVISO.
+- **Não é salvo:** o estado de sono (a cena carrega com todos acordados) e os contatos e impulsos acumulados (*warm start*). Uma cena salva e recarregada reproduz a mesma trajetória.
+- **Arquivo inválido** (número malformado, NaN/inf, quatérnio nulo, índice de corpo ou junta fora da faixa, poliedro côncavo, mais de 2000 corpos, mais de 32 MB...): a mensagem traz o número da linha e a cena atual **não é alterada**. Cenas sem nenhum corpo são válidas.
+- Limite de precisão: um `.scene` gerado numa build `float` pode ser recusado por uma build `double` (a checagem de planaridade é mais estrita); o exemplo `16_Modelos_importados` é assim.
+
+**`scene_export`** (sem raylib) regrava as cenas embutidas como `.scene` de exemplo:
+`scene_export physics_viewer/scenes`.
+
+---
+
+## 8. Estrutura do código
 
 ```text
 physics_viewer/
 ├── CMakeLists.txt
-├── include/viewer/core/   ViewerMath (pose→matriz), OrbitCamera, Scene, PolyShapes, ObjectSpawner, JointEditor, ConvexHull, ObjModel, ModelCollider, ContactTracker, TrajectoryRecorder, ModelImporter, PanelMetrics, SceneFile, RenderPose, Interaction, TimeControl, BodyEditor, WorldEditor   — SEM raylib
-├── src/core/
-├── src/app/main.cpp       a janela (única parte que usa raylib)
-├── tools/scene_export.cpp  grava as cenas embutidas como .scene (sem raylib)
-├── scenes/                exemplos e cenas salvas (.scene)
-├── tests/viewer_tests.cpp testes unitários do núcleo, sem janela
-└── tests/viewer_smoke.cpp fumaça: todas as cenas + fuzz, sem janela
+├── include/viewer/core/   núcleo, SEM raylib: ViewerMath (pose→matriz), OrbitCamera, Arcball, Scene,
+│                          PolyShapes, ObjectSpawner, JointEditor, ConvexHull, ObjModel, ModelCollider,
+│                          ModelAsset, ModelImporter, ContactTracker, TrajectoryRecorder, PanelMetrics,
+│                          SceneFile, SceneLibrary, RenderPose, Interaction, TimeControl, BodyEditor,
+│                          WorldEditor, DockLayout, SliderText, AppInfo
+├── src/core/              implementação do núcleo
+├── src/app/main.cpp       a janela (a única parte que usa raylib)
+├── tools/scene_export.cpp grava as cenas embutidas como .scene (sem raylib)
+├── scenes/                cenas .scene (exemplos e salvas), biblioteca.txt, viewer_layout.ini, exports/
+├── models/                modelos .obj de exemplo e importados
+└── tests/                 viewer_tests.cpp (unitários) e viewer_smoke.cpp (fumaça), sem janela
 ```
 
-A lógica fica fora da janela de propósito: cenas, câmera e matemática são testadas sem tela, e a camada
-raylib é fina.
+A lógica fica fora da janela de propósito: cenas, câmera, edição, importação e matemática são testadas sem tela, e
+a camada raylib é fina.
 
-## O que foi verificado
+Os módulos principais do núcleo:
 
-- Núcleo e testes (2060 verificações em `viewer_tests`, mais 4294 em `viewer_smoke` (V22: biblioteca de cenas — ordem padrão, mover, apagar/esconder/restaurar, persistência, texto salvo hostil, sessão completa em disco, exportações não duplicadas; V20: leitura do número digitado, unidades (%, mm, massa ao quadrado), limites e entradas inválidas, quebra de linhas do caminho; V19: movimento da câmera (frente/direita para qualquer yaw, velocidade por distância, dt limitado, entradas inválidas); V18: criar cápsula/cilindro e simular, limites e entradas inválidas, `.scene` ida e volta e 5 linhas de teste, ajuste automático e fino do colisor, modelo com colisor cápsula/cilindro simulado e salvo/recarregado, alturas do painel com todas as combinações; V17: alturas dos painéis (conteúdo sempre acima do rodapé), nomes seguros, importação de `.obj`+`.mtl`+textura (cópia idêntica, só o que é usado, nunca sobrescreve, 8 recusas sem lixo, caminhos inseguros ignorados, pasta inteira), colisores caixa/esfera/fecho (centro, meias-arestas, raio, folga, modelo plano, entradas inválidas), corpos com cada colisor simulados e salvos/recarregados com texto idêntico, e fuzz de 180 `.obj` de lixo; V16: gravador — recusas, linha inicial, t e passos crescentes, |q| = 1, CSV com 24 colunas em todas as linhas e sem nan/inf, quatérnio lido do texto == do corpo, parada por reinício/corpo apagado, salvar em arquivo, e o fuzz grava junto; o fuzz também salva e recarrega a cena no meio, cria estáticos de qualquer tamanho, cria/apaga juntas e troca para cenas vazias); V15a: fecho (cubo com 1000 pontos internos, cubo girado de 1 mm a 600 m, esfera, nuvens, duplicados, 8 entradas degeneradas, determinismo, aceitação pelo motor), 15 entradas `.obj` inválidas com a mensagem esperada, `.mtl`, carregamento do disco com avisos, forma centrada no centroide, toro côncavo sem cair pelo buraco, cubo importado repousando sobre a face; fuzz de 1200 nuvens (a metade degenerada) e 1200 textos `.obj` aleatórios; V15b: lista de modelos, asset (escala automática, nomes inseguros), malha para desenhar (triângulos, UV invertido, normais para fora, esfera centrada), spawn com `model` (dinâmico e estático), `.scene` com `model` (ida e volta com texto idêntico, sem pasta/arquivo → poliedro + aviso, 8 linhas inválidas, disco), fecho grande demais recusado, e o fuzz do editor também espalha modelos e recarrega; V14: cena vazia ida e volta, caixa estática com arestas e limites, `BodyEditor` em estáticos, `JointEditor` (3 tipos, corpo-mundo, 8 entradas inválidas sem mudar a cena, apagar com pivô órfão, simulação estável, ida e volta pelo `.scene`), `pointOnRay`; `DockLayout`: larguras e limites das colunas, arrastar a borda, recolher, janelas de 2000 a 1 px sem sobreposição, arquivo de layout (ida e volta e 9 entradas inválidas), rolagem (roda, polegar, limites, NaN); `SceneFile`: ida e volta das 14 cenas (texto idêntico e trajetória igual), arquivo em disco, 22 entradas inválidas com a mensagem esperada, limites e CRLF/comentários; as cenas da V11: bola que desmonta a pirâmide, porta que só gira em Y com o centro a 1 m do eixo, gangorra só em Z, martelo que derruba a torre, bilhar sem ganho de energia: matemática, câmera, as 14 cenas rodando 300 passos, pilha/pirâmide de pé, juntas coesas, `RenderPose`: Euler ida e volta, os três modos, gimbal lock, eixo-ângulo; `Interaction`: pick, mola, lançar, apagar; câmera: reset e follow; `TimeControl`: pausa, passo a passo, escalas de tempo, α de render, determinismo do passo manual; `BodyEditor`: massa com inércia, limites, gravidade 0/negativa, teletransporte sem rastro, eixo-ângulo, velocidades, acordar/dormir, recusa de estáticos e ids inválidos, pilha com topo 50× mais pesado; `ObjectSpawner`: os 6 tipos, limites de tamanho/massa/velocidade, entradas inválidas sem mudar a cena, orientação (quatérnio normalizado, eixo-ângulo, nulo → identidade), ponto de clique pelo raycast, lançamento, simulação estável com os novos corpos; `ContactTracker`: intensidade por velocidade, tinta por estado, flash que decai, marcadores limitados, contadores, eventos reais do motor (caixa que cai) e a pilha adormecendo; `WorldEditor`: captura e aplicação dos parâmetros do mundo com limites, Δt em execução, tabela das 9 flags de debug, linhas de debug com pose interpolada x atual): `float` e `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob ASan+UBSan.
-- `main.cpp`: passa na verificação de tipos contra os cabeçalhos da raylib 5.5 e do raygui 4.0, sem warnings, em `float` e
-  `double`. A convenção de matriz foi conferida no código-fonte da raylib (campo `mN` = elemento `N` do
-  array passado a `rlMultMatrixf`).
-- **A janela:** o usuário compilou e executou no Windows até a V7 (capturas de tela). Desde a V7.1, o texto dos
-  painéis é escuro (os painéis do raygui são claros) e o texto direto sobre a cena ganha uma faixa escura
-  translúcida. **Não verificado por mim:** o ajuste fino dos tamanhos depois da V7.1 (não consigo abrir a janela
-  no ambiente de desenvolvimento, sem X11/OpenGL); as larguras foram calculadas a partir das capturas.
-  Na V22, confira (janela, que não consigo abrir aqui): painel Cenas no topo da coluna direita sem sobrepor a Interpolação; Subir/Descer/Apagar (2 cliques)/Restaurar; setas seguindo a ordem da lista; reabrir o programa mantém a ordem e as apagadas.
-  Na V23, confira (janela, que não consigo abrir aqui): título "Quack3 v0.23"; Interpolação no topo da coluna direita; "Restaurar originais" cabendo no botão com a coluna estreita; tema cinza legível (contraste de textos, abas ativas em azul, campo de edição de slider).
-  Na V24, confira (janela, que não consigo abrir aqui): painel Arcball na coluna esquerda (esfera desenhada, arrastar gira o corpo selecionado, eixo laranja do quatérnio); caixa de orientação exponencial/Euler na aba Solver; clique duplo num slider mantém o valor antigo editável; "4/2" vira 2 e "1-4" vira -3 ao apertar Enter.
-  Na V20, confira (janela, que não consigo abrir aqui): clique duplo nos sliders (Enter, clique fora, Esc); Esc não fecha o programa durante a edição; aba Debug estreita sem sobreposição; caminho do CSV completo e *Copiar caminho*; barras maiores no menor tamanho de coluna.
-  Na V19, confira (janela, que não consigo abrir aqui): WASD/QE movem a câmera e Shift acelera; esferas com atrito alto param de girar em Y; Home volta.
-  Na V18, confira (janela, que não consigo abrir aqui): os 9 botões de forma cabem em 3 linhas; criar cápsula/cilindro e ver a prévia em fio; escolher Capsula/Cilindro como colisor de um modelo e ver os sliders de ajuste e o fio acompanharem; nenhum painel sobreposto com os sliders novos.
-  Na V17, confira (janela, que não consigo abrir aqui): arrastar um `.obj` seu para a janela o coloca na lista já selecionado; o campo de caminho + Importar faz o mesmo e mostra a mensagem; trocar Fecho/Caixa/Esfera atualiza o resumo e o "fio" mostra a forma; na aba Adicionar → caixa o checkbox "estático" fica acima do rodapé; textos longos do painel do quatérnio não passam da borda.
-  Na V16, confira (janela, que não consigo abrir aqui): F5 esconde as colunas e mostra o quatérnio grande e ESC volta; F6 gira a câmera; gravar um corpo caindo, salvar e abrir o CSV (24 colunas, `norma_q` = 1); "Todos" grava um corpo por linha; trocar de cena para a gravação com aviso.
-  Na V15, confira (desenho com textura, que não consigo abrir aqui): a lista mostra cubo, esfera e toro; a textura xadrez/listras aparece e acompanha a rotação; o brilho muda com a rotação; o fio do fecho coincide com o corpo; "CONCAVO" aparece no toro; salvar e carregar traz o modelo com a textura de volta.
-  Na V14, confira: a aba Juntas cabe no painel (5 sliders, botões, mensagens) e rola com a coluna; o clique na cena escolhe A/B/ponto sem arrastar o corpo; a prévia amarela acompanha os sliders; criar uma dobradiça ao mundo faz o corpo girar preso ao pivô cinza; Nova (vazia) mostra a grade sem corpos; salvar e carregar mantém paredes e juntas.
-  Na V13, confira (a mudança mais arriscada, feita sem poder abrir a janela): as colunas aparecem nas laterais, a cena
-  fica no meio e **não está esticada** ao arrastar a borda; clicar e arrastar objetos acerta onde o mouse aponta; a
-  rolagem funciona e nada sai da coluna; o texto do HUD aparece dentro da cena; `<` `>` recolhem e reabrem; o layout volta
-  ao reabrir o programa.
-  Na V12, confira: a aba Cenas cabe no painel (campo, botões, lista de 104 px, mensagem), digitar o nome não aciona
-  atalhos, Salvar cria o arquivo em `physics_viewer/scenes/` e Carregar traz a cena de volta pausada.
-  Na V10, confira: se a janela redimensiona sem sobrepor painéis (mínimo 960 × 700) e se F11 entra e sai da tela cheia.
-  Na V9, confira: se a aba "Evento" cabe no painel (5 abas) e se o flash/anéis aparecem ao soltar uma caixa; os blocos
-  da Pilha ficam azuis ao dormir e voltam à cor ao acordar.
-  Na V8, confira: se o painel Adicionar cabe (344 px de altura; a aba Objeto tem 306 px) e nenhum texto é cortado, se as duas fileiras de tipos
-  mudam a forma, se a prévia amarela acompanha o mouse e se o clique cria o objeto no ponto certo.
-  Confira na V7.1: se todo texto dos painéis é legível, se cada slider mostra seu número à direita, se nenhum
-  rótulo é cortado pela barra do slider e se o texto de baixo (FPS e atalhos) aparece sobre a faixa escura.
+- **`ConvexHull`** — fecho convexo 3D próprio (*quickhull*): tetraedro inicial, ponto mais distante, região visível e horizonte; triângulos vizinhos e coplanares são fundidos em polígonos. Entradas degeneradas (menos de 4 pontos, NaN, coincidentes, colineares, coplanares) dão erro com mensagem, nunca um poliedro inválido.
+- **`ObjModel`** e **`ModelImporter`** — leitura do `.obj`/`.mtl` e importação com cópia segura para `models/`.
+- **`ModelCollider`** — do modelo à forma de colisão: centra na caixa envolvente, calcula o fecho, centra no centroide (o corpo gira em torno do centro de massa) e devolve a forma, o deslocamento da malha original e indicadores (volume do modelo e do colisor, concavidade).
+- **`Interaction`** — seleção por raycast do motor, mola de arrasto, lançamento e remoção.
+- **`BodyEditor`, `WorldEditor`, `ObjectSpawner`, `JointEditor`** — edição de corpos, mundo, criação de objetos e juntas.
+- **`RenderPose`** — os três modos de interpolação; **`TimeControl`** — pausa, passo e escala de tempo; **`DockLayout`** — geometria das colunas e rolagem; **`SceneFile`**, **`SceneLibrary`** — arquivo de cena e lista de cenas.
+
+---
+
+## 9. Testes
+
+`ctest` roda dois testes do núcleo, sem janela:
+
+- **`viewer_tests`** — verificações unitárias de todos os módulos do núcleo: matemática e câmera, as cenas, `RenderPose`, `Interaction`, `TimeControl`, `BodyEditor`, `ObjectSpawner`, `JointEditor`, `WorldEditor`, `ContactTracker`, `TrajectoryRecorder`, `DockLayout`, `SceneFile` (ida e volta das 14 cenas, 22 entradas inválidas), `SceneLibrary`, `ConvexHull`, `ObjModel`, `ModelCollider`, `ModelImporter` e `SliderText`.
+- **`viewer_smoke`** — todas as cenas por 20 s no mesmo caminho da janela, com poses finitas e quatérnios unitários nos três modos de interpolação, mais um *fuzz* determinístico: centenas de operações aleatórias de criar, lançar, apagar, editar parâmetros, mudar o mundo, importar modelos, salvar e recarregar cenas e trocar de cena.
+
+Os testes passam com o motor em `float` e em `double`, sem warnings (`-Wall -Wextra -Wpedantic`) e sob
+AddressSanitizer + UBSan. Para também registrar a abertura da janela por 5 quadros (precisa de tela e OpenGL):
+`-DVIEWER_TEST_APP=ON`.
+
+---
+
+## 10. Limitações
+
+- Um modelo côncavo colide como o seu fecho convexo (o motor não tem malha estática nem forma composta).
+- Só o formato `.obj` é importado.
+- A cena 3D é desenhada numa textura sem o antisserrilhamento (MSAA) da janela, então as bordas ficam um pouco mais serrilhadas.
+- Os sliders têm faixas fixas (posição ±12 m, y de −2 a 14 m, velocidades ±20): um valor fora da faixa continua valendo no corpo, mas aparece “preso” na borda do slider.
+- Um slider só edita quando o cursor está sobre a barra com o botão apertado.
+- As limitações do motor valem aqui (ver o README principal): sem colisão contínua, juntas só de igualdade, torres altas balançam.
